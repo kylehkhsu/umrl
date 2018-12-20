@@ -1,54 +1,3 @@
-# def run(env):
-#     ob = env.reset()
-#     # ipdb.set_trace()
-#
-#     for t in range(50):
-#         # action = np.array([float(a) for a in input('format: action_dim_1 action_dim_2\n').split()])
-#         action = np.random.random(2)
-#         print('action', action)
-#         ob, reward, done, info = env.step(action)
-#         print('ob:', ob, 'reward:', reward, 'done:', done, 'info:', info, sep='\n')
-#         logger.logkv('reward', reward)
-#         logger.dumpkvs()
-#         env.render()
-#         im = env.get_image()
-#         time.sleep(0.05)
-#
-#
-# def main():
-#     import ipdb
-#     # env = ImageEnv(Point2DEnv(render_size=256, randomize_position_on_reset=params.randomize_position_on_reset), imsize=256)
-#     env = ImageEnv(Point2DEnv(render_size=256,
-#                                         randomize_position_on_reset=params.randomize_position_on_reset,
-#                                         fixed_goal=params.fixed_goal), imsize=256)
-#     for i_update in range(10000):
-#         ob = env.reset()
-#         for t in range(100):
-#             # ipdb.set_trace()
-#             state = ob['state_observation']
-#             goal = ob['state_desired_goal']
-#             state_goal = np.concatenate((state, goal))
-#             action = index_to_action(select_action(state_goal))
-#             ob, reward, done, info = env.step(action)
-#             policy.rewards.append(reward)
-#         logger.logkv('reward_sum', sum(policy.rewards))
-#         logger.dumpkvs()
-#         finish_episode()
-#
-#     # # test
-#     # ob = env.reset()
-#     # for t in range(50):
-#     #     state = ob['state_observation']
-#     #     goal = ob['state_desired_goal']
-#     #     state_goal = np.concatenate((state, goal))
-#     #     action = index_to_action(select_action(state_goal))
-#     #     ob, reward, done, info = env.step(action)
-#     #     env.render()
-#     #     im = env.get_image()
-#     #     time.sleep(0.05)
-
-
-
 import copy
 import os
 import time
@@ -78,27 +27,35 @@ args.algo = 'ppo'
 args.env_name = 'Point2DEnv-v0'
 args.use_gae = True
 args.gamma = 1
-args.save_interval = 50
 args.episode_length = 30
 args.num_steps = args.episode_length * 10
 args.fixed_start = True
 args.trajectory_embedding = 'avg'
-args.reward = 'z|w'     # or l2 or 'z|w'
 args.skew = False   # unused
 args.context = 'cluster_mean'     # or 'goal' for debugging
 args.obs = 'pos_speed'
-args.clustering_period = 10
 args.sparse_reward = False
-args.uniform_cluster_categorical = True
-args.entropy_coef = 0   # default: 0.01
+args.uniform_cluster_categorical = True     # max I(z;w) = H(z) - H(z|w) => True
+args.num_updates = 500
+args.clustering_period = args.num_updates // 20
+args.save_interval = args.clustering_period
+args.fit_on_entire_history = True
+args.component_weight_threshold = 1e-5
+args.reward = 'z|w'     # or l2 or 'z|w'
+args.entropy_coef = 0  # default: 0.01
+args.standardize_embeddings = True
+args.component_constraint_l_inf = 0.1
+args.component_constraint_l_2 = 0.1
+args.max_components = 50
+
 
 # num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
 # logging stuff
-# args.log_dir = './output/point2d/20181218/pos_speed_avg'
-args.log_dir = './output/debug/20181218/clustering_z|w'
+args.log_dir = './output/point2d/20181220/z|w_standardized'
+# args.log_dir = './output/debug/20181218/clustering_z|w'
 
 
 def train():
@@ -135,17 +92,19 @@ def train():
     else:
         raise ValueError
 
-    fake_trajectories = []
+    start = time.time()
+
+    starting_trajectories = []
     for i in range(args.num_processes * args.num_steps):
         embedding = torch.rand(embedding_shape)
         embedding = embedding * torch.Tensor([1, 1, 0.5])
         embedding = embedding - torch.Tensor([0.5, 0.5, 0])
         embedding = embedding.unsqueeze(0)
-        fake_trajectories.append(embedding)
+        starting_trajectories.append(embedding)
 
     rewarder = Rewarder(args,
-                        embedding_shape=embedding_shape,
-                        starting_trajectories=fake_trajectories)
+                        embedding_shape=embedding_shape)
+    rewarder.fit_generative_model(starting_trajectories)
 
     actor_critic = Policy(embedding_context_shape, envs.action_space,
                           base_kwargs={'recurrent': args.recurrent_policy})
@@ -161,10 +120,8 @@ def train():
 
     episode_rewards = deque(maxlen=10)
 
-    num_updates = 1000
-
-    for j in range(num_updates):
-        if j % args.clustering_period == 0:
+    for j in range(args.num_updates):
+        if (j + 1) % args.clustering_period == 0:
             rewarder.fit_generative_model()
         raw_obs = envs.reset()
         embedding_context = rewarder.reset(raw_obs)
@@ -172,10 +129,10 @@ def train():
         rollouts.to(device)
 
         if args.use_linear_lr_decay:
-            update_linear_schedule(agent.optimizer, j, num_updates, args.lr)
+            update_linear_schedule(agent.optimizer, j, args.num_updates, args.lr)
 
         if args.algo == 'ppo' and args.use_linear_clip_decay:
-            agent.clip_param = args.clip_param  * (1 - j / float(num_updates))
+            agent.clip_param = args.clip_param  * (1 - j / float(args.num_updates))
 
         for step in range(args.num_steps):
             # Sample actions
@@ -218,9 +175,12 @@ def train():
         logger.logkv('dist_entropy', dist_entropy)
         logger.logkv('reward_avg', reward_avg.item())
         logger.logkv('steps', (j + 1) * args.num_steps * args.num_processes)
+        logger.logkv('policy_updates', (j + 1))
+        logger.logkv('time', time.time() - start)
+        logger.logkv('num_valid_components', len(rewarder.valid_components))
         logger.dumpkvs()
 
-        if (j % args.save_interval == 0 or j == num_updates - 1) and args.log_dir != '':
+        if (j % args.save_interval == 0 or j == args.num_updates - 1) and args.log_dir != '':
 
             # A really ugly way to save a model to CPU
             save_model = actor_critic
@@ -232,6 +192,7 @@ def train():
 
             torch.save(save_model, os.path.join(args.log_dir, args.env_name + ".pt"))
             rewarder.history.dump()
+            print('saved model and history')
 
 from a2c_ppo_acktr.utils import get_render_func
 

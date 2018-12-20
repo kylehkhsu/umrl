@@ -117,3 +117,4 @@ dmypy.json
 # Project specific
 output/
 .idea/
+pyhtmlwriter/

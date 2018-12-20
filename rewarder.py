@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import ipdb
 from sklearn.mixture import BayesianGaussianMixture
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import multivariate_normal
 from copy import deepcopy
 import pickle
@@ -9,23 +10,27 @@ import os
 
 
 class History(object):
-    def __init__(self, args):
+    def __init__(self, args=None):
         self.args = args
         self.episodes = []
         self.generative_model = None
+        self.standardizer = None
         self.filename = os.path.join(self.args.log_dir, 'history.pkl')
         self.all = []
 
     def new(self):
         if self.generative_model is not None and len(self.episodes) > 0:
             self.all.append(dict(generative_model=self.generative_model,
+                                 standardizer=self.standardizer,
                                  episodes=self.episodes))
         self.generative_model = None
+        self.standardizer = None
         self.episodes = []
 
-    def save_generative_model(self, generative_model):
+    def save_generative_model(self, generative_model, standardizer):
         assert self.generative_model is None
         self.generative_model = deepcopy(generative_model)
+        self.standardizer = deepcopy(standardizer)
 
     def save_episode(self, trajectory, task):
         self.episodes.append((trajectory, task))
@@ -41,14 +46,13 @@ class Rewarder(object):
 
     def __init__(self,
                  args,
-                 embedding_shape,
-                 starting_trajectories=[]):
+                 embedding_shape):
         self.args = args
         self.num_processes = args.num_processes
         self.embedding_shape = embedding_shape
         self.episode_length = args.episode_length
         self.trajectory_embedding = args.trajectory_embedding
-        self.trajectories = starting_trajectories
+        self.trajectories = []
         self.history = History(args)
         self.clustering_counter = 0
         # self.encoding_function = lambda x: x
@@ -61,26 +65,49 @@ class Rewarder(object):
         ]
 
         self.step_counter = [0 for i in range(args.num_processes)]
-        self.dpgmm = BayesianGaussianMixture(n_components=50,
+        self.dpgmm = BayesianGaussianMixture(n_components=self.args.max_components,
                                              covariance_type='full',
-                                             verbose=0,
-                                             max_iter=10000,
+                                             verbose=1,
+                                             verbose_interval=1000,
+                                             max_iter=5000,
+                                             n_init=2,
                                              weight_concentration_prior_type='dirichlet_process')
-        self.weights = None
+        self.valid_components = None
+        self.standardizer = StandardScaler()
     # def encode_trajectory(self, trajectory):
     #     return self.encoding_function(trajectory)
 
-    def fit_generative_model(self):
+    def fit_generative_model(self, trajectories=None):
         self.history.new()
+        if trajectories is not None:
+            trajectory_embeddings = torch.cat(trajectories, dim=0)
+        else:
+            trajectory_embeddings = torch.cat(self.trajectories, dim=0)
+        if not self.args.fit_on_entire_history:
+            self.trajectories = []
+        if self.args.standardize_embeddings:
+            self.standardizer.fit(trajectory_embeddings)
+            trajectory_embeddings = self.standardizer.transform(trajectory_embeddings)
 
-        trajectory_embeddings = torch.cat(self.trajectories, dim=0)
-        self.trajectories = []  #TODO: change, maybe
         self.dpgmm.fit(trajectory_embeddings)
-        self.weights = np.compress(self.dpgmm.weights_ >= 1e-8,
-                                   self.dpgmm.weights_)
-        self.weights = self.weights / sum(self.weights)
+        components = np.argwhere(self.dpgmm.weights_ >= self.args.component_weight_threshold).reshape([-1])
+        valid_components = []
+        for i, component in enumerate(components):
+            if i == 0:
+                valid_components.append(component)
+                continue
+            current_mean = self.dpgmm.means_[component]
+            prev_means = self.dpgmm.means_[components[:i]]
+            l_2 = min(np.linalg.norm(prev_means - current_mean, ord=2, axis=1))
+            l_inf = min(np.linalg.norm(prev_means - current_mean, ord=np.inf, axis=1))
+            if l_2 >= self.args.component_constraint_l_2 or l_inf >= self.args.component_constraint_l_inf:
+                valid_components.append(component)
+        self.valid_components = np.array(valid_components)
 
-        self.history.save_generative_model(self.dpgmm)
+        print('raw means of valid components:\n{}'.format(self._get_raw_means(self.valid_components)))
+        print('standardized means of valid components:\n{}'.format(self.dpgmm.means_[self.valid_components]))
+
+        self.history.save_generative_model(self.dpgmm, self.standardizer)
 
     def skew_generative_model(self):
         pass
@@ -90,6 +117,12 @@ class Rewarder(object):
         self.current_trajectory[i_process] = torch.cat(
             (self.current_trajectory[i_process], embedding[i_process].unsqueeze(0)), dim=0
         )
+
+    def _get_raw_means(self, i):
+        mean = self.dpgmm.means_[i]
+        if self.args.standardize_embeddings:
+            mean = self.standardizer.inverse_transform(mean)
+        return mean
 
     def _sample_task_one(self, i_process):
         if self.args.context == 'goal':
@@ -101,11 +134,13 @@ class Rewarder(object):
                 raise NotImplementedError
             else:
                 if self.args.uniform_cluster_categorical:
-                    z = np.random.choice(len(self.weights), size=1, replace=False)[0]   # U(z)
+                    z = np.random.choice(self.valid_components, size=1, replace=False)[0]   # U(z)
                 else:
-                    z = np.random.choice(len(self.weights), size=1, replace=False, p=self.weights)[0]
+                    weights = self.dpgmm.weights_[self.valid_components]
+                    weights = weights / sum(weights)
+                    z = np.random.choice(self.valid_components, size=1, replace=False, p=weights)[0]
                 self.task[i_process] = z
-                self.context[i_process] = self.dpgmm.means_[z]
+                self.context[i_process] = self._get_raw_means(z)
 
     def _reset_one(self, i_process, raw_obs):
         self.current_trajectory[i_process] = torch.zeros(size=self.embedding_shape).unsqueeze(0)
@@ -128,8 +163,6 @@ class Rewarder(object):
             done_ = self.step_counter[i] == self.episode_length
             if done_:
                 self._save_trajectory(i)
-                # self._reset_one(i, embedding)
-                # ipdb.set_trace()
             self._insert_one(i, embedding)
             done[i] = done_
             reward.append(self._reward(i, done_))
@@ -157,7 +190,7 @@ class Rewarder(object):
             z = self.task[i_process]
 
             denominator = 0
-            for i in range(len(self.weights)):
+            for i in range(len(self.valid_components)):
                 x = multivariate_normal.pdf(x=w,
                                             mean=self.dpgmm.means_[i],
                                             cov=self.dpgmm.covariances_[i])
@@ -192,5 +225,3 @@ class Rewarder(object):
             raise NotImplementedError
 
 
-if __name__ == '__main__':
-    pass
