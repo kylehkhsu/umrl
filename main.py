@@ -54,7 +54,7 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
 # logging stuff
-args.log_dir = './output/point2d/20181220/z|w_standardized'
+args.log_dir = './output/point2d/20181220/z|w'
 # args.log_dir = './output/debug/20181218/clustering_z|w'
 
 
@@ -79,16 +79,16 @@ def train():
                          True)
 
     if args.obs == 'pos_speed':
-        embedding_shape = (envs.observation_space.shape[0] + 1,)
+        obs_shape = (envs.observation_space.shape[0] + 1,)
     elif args.obs == 'pos':
-        embedding_shape = envs.observation_space.shape
+        obs_shape = envs.observation_space.shape
     else:
         raise ValueError
 
     if args.context == 'goal':
-        embedding_context_shape = (embedding_shape[0] * 2,)
+        obs_context_shape = (obs_shape[0] * 2,)
     elif args.context == 'cluster_mean':
-        embedding_context_shape = (embedding_shape[0] * 2,)
+        obs_context_shape = (obs_shape[0] * 2,)
     else:
         raise ValueError
 
@@ -96,17 +96,17 @@ def train():
 
     starting_trajectories = []
     for i in range(args.num_processes * args.num_steps):
-        embedding = torch.rand(embedding_shape)
+        embedding = torch.rand(obs_shape)
         embedding = embedding * torch.Tensor([1, 1, 0.5])
         embedding = embedding - torch.Tensor([0.5, 0.5, 0])
         embedding = embedding.unsqueeze(0)
         starting_trajectories.append(embedding)
 
     rewarder = Rewarder(args,
-                        embedding_shape=embedding_shape)
+                        obs_shape=obs_shape)
     rewarder.fit_generative_model(starting_trajectories)
 
-    actor_critic = Policy(embedding_context_shape, envs.action_space,
+    actor_critic = Policy(obs_context_shape, envs.action_space,
                           base_kwargs={'recurrent': args.recurrent_policy})
     actor_critic.to(device)
     agent = algo.PPO(actor_critic, args.clip_param, args.ppo_epoch, args.num_mini_batch,
@@ -115,7 +115,7 @@ def train():
                      max_grad_norm=args.max_grad_norm)
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                        embedding_context_shape, envs.action_space,
+                        obs_context_shape, envs.action_space,
                         actor_critic.recurrent_hidden_state_size)
 
     episode_rewards = deque(maxlen=10)
@@ -124,8 +124,8 @@ def train():
         if (j + 1) % args.clustering_period == 0:
             rewarder.fit_generative_model()
         raw_obs = envs.reset()
-        embedding_context = rewarder.reset(raw_obs)
-        rollouts.obs[0].copy_(embedding_context)
+        obs_context = rewarder.reset(raw_obs)
+        rollouts.obs[0].copy_(obs_context)
         rollouts.to(device)
 
         if args.use_linear_lr_decay:
@@ -144,16 +144,16 @@ def train():
 
             # Obser reward and next obs
             raw_obs, _, done, infos = envs.step(action)
-            embedding_context, reward, done, infos = rewarder.step(raw_obs, done, infos)
+            obs_context, reward, done, infos = rewarder.step(raw_obs, done, infos)
             assert (all(done) or not any(done)) # synchronous reset
             if all(done) and step != args.num_steps - 1:
                 raw_obs = envs.reset()
-                embedding_context = rewarder.reset(raw_obs)
+                obs_context = rewarder.reset(raw_obs)
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0]
                                        for done_ in done])
-            rollouts.insert(embedding_context, recurrent_hidden_states, action, action_log_prob, value, reward, masks)
+            rollouts.insert(obs_context, recurrent_hidden_states, action, action_log_prob, value, reward, masks)
 
         assert all(done), "can't allow leakage of episodes"
 

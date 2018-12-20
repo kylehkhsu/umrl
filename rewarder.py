@@ -46,19 +46,16 @@ class Rewarder(object):
 
     def __init__(self,
                  args,
-                 embedding_shape):
+                 obs_shape):
         self.args = args
-        self.num_processes = args.num_processes
-        self.embedding_shape = embedding_shape
-        self.episode_length = args.episode_length
-        self.trajectory_embedding = args.trajectory_embedding
-        self.trajectories = []
+        self.obs_shape = obs_shape
+        self.raw_trajectory_embeddings = []
         self.history = History(args)
         self.clustering_counter = 0
         # self.encoding_function = lambda x: x
-        self.current_trajectory = [torch.zeros(size=embedding_shape).unsqueeze(0) for i in range(args.num_processes)]
+        self.raw_trajectory_current = [torch.zeros(size=obs_shape).unsqueeze(0) for i in range(args.num_processes)]
         self.context = [
-            np.zeros(shape=embedding_shape, dtype=np.float32) for i in range(args.num_processes)
+            np.zeros(shape=obs_shape, dtype=np.float32) for i in range(args.num_processes)
         ]
         self.task = [
             -1 for i in range(args.num_processes)
@@ -79,17 +76,22 @@ class Rewarder(object):
 
     def fit_generative_model(self, trajectories=None):
         self.history.new()
-        if trajectories is not None:
+        if trajectories is not None:    # first fitting
+            assert self.clustering_counter == 0
             trajectory_embeddings = torch.cat(trajectories, dim=0)
         else:
-            trajectory_embeddings = torch.cat(self.trajectories, dim=0)
+            trajectory_embeddings = torch.cat(self.raw_trajectory_embeddings, dim=0)
+
         if not self.args.fit_on_entire_history:
-            self.trajectories = []
+            self.raw_trajectory_embeddings = []
+
         if self.args.standardize_embeddings:
             self.standardizer.fit(trajectory_embeddings)
-            trajectory_embeddings = self.standardizer.transform(trajectory_embeddings)
+
+        trajectory_embeddings = self._get_standardized_trajectory_embedding(trajectory_embeddings)
 
         self.dpgmm.fit(trajectory_embeddings)
+
         components = np.argwhere(self.dpgmm.weights_ >= self.args.component_weight_threshold).reshape([-1])
         valid_components = []
         for i, component in enumerate(components):
@@ -107,21 +109,22 @@ class Rewarder(object):
         print('raw means of valid components:\n{}'.format(self._get_raw_means(self.valid_components)))
         print('standardized means of valid components:\n{}'.format(self.dpgmm.means_[self.valid_components]))
 
+        self.clustering_counter += 1
         self.history.save_generative_model(self.dpgmm, self.standardizer)
 
     def skew_generative_model(self):
         pass
 
     def _insert_one(self, i_process, embedding):
-        assert self.current_trajectory[i_process] is not None
-        self.current_trajectory[i_process] = torch.cat(
-            (self.current_trajectory[i_process], embedding[i_process].unsqueeze(0)), dim=0
+        assert self.raw_trajectory_current[i_process] is not None
+        self.raw_trajectory_current[i_process] = torch.cat(
+            (self.raw_trajectory_current[i_process], embedding[i_process].unsqueeze(0)), dim=0
         )
 
     def _get_raw_means(self, i):
         mean = self.dpgmm.means_[i]
         if self.args.standardize_embeddings:
-            mean = self.standardizer.inverse_transform(mean)
+            mean = self.standardizer.inverse_transform(mean, copy=None)
         return mean
 
     def _sample_task_one(self, i_process):
@@ -143,24 +146,24 @@ class Rewarder(object):
                 self.context[i_process] = self._get_raw_means(z)
 
     def _reset_one(self, i_process, raw_obs):
-        self.current_trajectory[i_process] = torch.zeros(size=self.embedding_shape).unsqueeze(0)
-        self.current_trajectory[i_process][0][:raw_obs.shape[1]] = raw_obs[i_process]
+        self.raw_trajectory_current[i_process] = torch.zeros(size=self.obs_shape).unsqueeze(0)
+        self.raw_trajectory_current[i_process][0][:raw_obs.shape[1]] = raw_obs[i_process]
         self._sample_task_one(i_process)
         self.step_counter[i_process] = 0
 
     def reset(self, raw_obs):
-        for i in range(self.num_processes):
+        for i in range(self.args.num_processes):
             self._reset_one(i, raw_obs)
         return torch.cat(
-            (torch.cat(self.current_trajectory, dim=0), torch.from_numpy(np.array(self.context, dtype=np.float32))), dim=1
+            (torch.cat(self.raw_trajectory_current, dim=0), torch.from_numpy(np.array(self.context, dtype=np.float32))), dim=1
         )
 
     def step(self, raw_obs, done, infos):
         embedding = self._process_obs(raw_obs)
         reward = []
-        for i in range(self.num_processes):
+        for i in range(self.args.num_processes):
             self.step_counter[i] += 1
-            done_ = self.step_counter[i] == self.episode_length
+            done_ = self.step_counter[i] == self.args.episode_length
             if done_:
                 self._save_trajectory(i)
             self._insert_one(i, embedding)
@@ -174,19 +177,19 @@ class Rewarder(object):
         if self.args.sparse_reward and not done:
             return 0
 
-        traj_embedding = self.get_traj_embedding(i_process)
+        trajectory_embedding = self._get_standardized_trajectory_embedding(self.trajectory_to_embedding(i_process))
         if self.args.reward == 'l2':
-            difference = traj_embedding - torch.from_numpy(self.context[i_process])
+            difference = trajectory_embedding - torch.from_numpy(self.context[i_process])
             scaled_difference = difference * torch.Tensor([1, 1, 10])
             d = torch.norm(scaled_difference)
             r = -d
         elif self.args.reward == 'w|z':
             z = self.task[i_process]
-            r = multivariate_normal.logpdf(x=traj_embedding,
+            r = multivariate_normal.logpdf(x=trajectory_embedding,
                                            mean=self.dpgmm.means_[z],
                                            cov=self.dpgmm.covariances_[z])
         elif self.args.reward == 'z|w':
-            w = traj_embedding
+            w = trajectory_embedding
             z = self.task[i_process]
 
             denominator = 0
@@ -207,21 +210,28 @@ class Rewarder(object):
         return r
 
     def _save_trajectory(self, i_process):
-        self.trajectories.append(self.get_traj_embedding(i_process).unsqueeze(0))
-        self.history.save_episode(self.current_trajectory[i_process], self.task[i_process])
+        self.raw_trajectory_embeddings.append(self.trajectory_to_embedding(i_process).unsqueeze(0))
+        self.history.save_episode(self.raw_trajectory_current[i_process], self.task[i_process])
 
     def _process_obs(self, raw_obs):
         speed = []
-        for i in range(self.num_processes):
-            speed.append(torch.norm((raw_obs[i] - self.current_trajectory[i][-1][:raw_obs.shape[1]]).unsqueeze(0)).unsqueeze(0))
+        for i in range(self.args.num_processes):
+            speed.append(torch.norm((raw_obs[i] - self.raw_trajectory_current[i][-1][:raw_obs.shape[1]]).unsqueeze(0)).unsqueeze(0))
         return torch.cat([raw_obs, torch.stack(speed, dim=0)], dim=1)
 
-    def get_traj_embedding(self, i_process=0):
-        if self.trajectory_embedding == 'avg':
-            return torch.mean(self.current_trajectory[i_process], dim=0)
-        elif self.trajectory_embedding == 'final':
-            return self.current_trajectory[i_process][-1]
+    def trajectory_to_embedding(self, i_process=0):
+        if self.args.trajectory_embedding_type == 'avg':
+            trajectory_embedding = torch.mean(self.raw_trajectory_current[i_process], dim=0)
+        elif self.args.trajectory_embedding_type == 'final':
+            trajectory_embedding = self.raw_trajectory_current[i_process][-1]
         else:
             raise NotImplementedError
+        return trajectory_embedding
+
+    def _get_standardized_trajectory_embedding(self, trajectory_embedding):
+        if self.args.standardize_embeddings:
+            trajectory_embedding = self.standardizer.transform(trajectory_embedding, copy=None)
+        return trajectory_embedding
+
 
 
