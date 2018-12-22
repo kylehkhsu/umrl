@@ -3,6 +3,7 @@ import torch
 import ipdb
 from sklearn.mixture import BayesianGaussianMixture
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import FunctionTransformer
 from scipy.stats import multivariate_normal
 from copy import deepcopy
 import pickle
@@ -42,6 +43,12 @@ class History(object):
         return pickle.load(open(self.filename, 'rb'))
 
 
+def transform(x):
+    return x * np.array([0, 0, 1])
+
+def inverse_transform(x):
+    return x / np.array([1, 1, 1])
+
 class Rewarder(object):
 
     def __init__(self,
@@ -70,15 +77,25 @@ class Rewarder(object):
                                              n_init=2,
                                              weight_concentration_prior_type='dirichlet_process')
         self.valid_components = None
-        self.standardizer = StandardScaler()
+        if not self.args.custom_transform:
+            self.standardizer = StandardScaler()
+        else:
+            self._standardizer_transform = transform
+            self._standardizer_inverse_transform = inverse_transform
+            self.standardizer = FunctionTransformer(
+                func=self._standardizer_transform,
+                inverse_func=self._standardizer_inverse_transform,
+                validate=True,
+                check_inverse=False
+            )
     # def encode_trajectory(self, trajectory):
     #     return self.encoding_function(trajectory)
 
-    def fit_generative_model(self, trajectories=None):
+    def fit_generative_model(self, raw_trajectory_embeddings=None):
         self.history.new()
-        if trajectories is not None:    # first fitting
+        if raw_trajectory_embeddings is not None:    # first fitting
             assert self.clustering_counter == 0
-            trajectory_embeddings = torch.cat(trajectories, dim=0)
+            trajectory_embeddings = torch.cat(raw_trajectory_embeddings, dim=0)
         else:
             trajectory_embeddings = torch.cat(self.raw_trajectory_embeddings, dim=0)
 
@@ -123,8 +140,10 @@ class Rewarder(object):
 
     def _get_raw_means(self, i):
         mean = self.dpgmm.means_[i]
+        if mean.ndim == 1:
+            mean = mean.reshape([1, -1])
         if self.args.standardize_embeddings:
-            mean = self.standardizer.inverse_transform(mean, copy=None)
+            mean = self.standardizer.inverse_transform(mean)
         return mean
 
     def _sample_task_one(self, i_process):
@@ -143,7 +162,7 @@ class Rewarder(object):
                     weights = weights / sum(weights)
                     z = np.random.choice(self.valid_components, size=1, replace=False, p=weights)[0]
                 self.task[i_process] = z
-                self.context[i_process] = self._get_raw_means(z)
+                self.context[i_process] = self._get_raw_means(z).astype(np.float32)
 
     def _reset_one(self, i_process, raw_obs):
         self.raw_trajectory_current[i_process] = torch.zeros(size=self.obs_shape).unsqueeze(0)
@@ -155,7 +174,7 @@ class Rewarder(object):
         for i in range(self.args.num_processes):
             self._reset_one(i, raw_obs)
         return torch.cat(
-            (torch.cat(self.raw_trajectory_current, dim=0), torch.from_numpy(np.array(self.context, dtype=np.float32))), dim=1
+            [torch.cat(self.raw_trajectory_current, dim=0), torch.from_numpy(np.concatenate(self.context, axis=0))], dim=1
         )
 
     def step(self, raw_obs, done, infos):
@@ -170,7 +189,7 @@ class Rewarder(object):
             done[i] = done_
             reward.append(self._reward(i, done_))
         reward = torch.from_numpy(np.array(reward, dtype=np.float32)).unsqueeze(1)
-        context = torch.from_numpy(np.array(self.context, dtype=np.float32))
+        context = torch.from_numpy(np.concatenate(self.context, axis=0))
         return torch.cat([embedding, context], dim=1), reward, done, infos
 
     def _reward(self, i_process, done):
@@ -193,7 +212,7 @@ class Rewarder(object):
             z = self.task[i_process]
 
             denominator = 0
-            for i in range(len(self.valid_components)):
+            for i in self.valid_components:
                 x = multivariate_normal.pdf(x=w,
                                             mean=self.dpgmm.means_[i],
                                             cov=self.dpgmm.covariances_[i])
@@ -210,7 +229,7 @@ class Rewarder(object):
         return r
 
     def _save_trajectory(self, i_process):
-        self.raw_trajectory_embeddings.append(self.trajectory_to_embedding(i_process).unsqueeze(0))
+        self.raw_trajectory_embeddings.append(self.trajectory_to_embedding(i_process))
         self.history.save_episode(self.raw_trajectory_current[i_process], self.task[i_process])
 
     def _process_obs(self, raw_obs):
@@ -221,16 +240,16 @@ class Rewarder(object):
 
     def trajectory_to_embedding(self, i_process=0):
         if self.args.trajectory_embedding_type == 'avg':
-            trajectory_embedding = torch.mean(self.raw_trajectory_current[i_process], dim=0)
+            trajectory_embedding = torch.mean(self.raw_trajectory_current[i_process], dim=0).unsqueeze(0)
         elif self.args.trajectory_embedding_type == 'final':
-            trajectory_embedding = self.raw_trajectory_current[i_process][-1]
+            trajectory_embedding = self.raw_trajectory_current[i_process][-1].unsqueeze(0)
         else:
             raise NotImplementedError
         return trajectory_embedding
 
     def _get_standardized_trajectory_embedding(self, trajectory_embedding):
         if self.args.standardize_embeddings:
-            trajectory_embedding = self.standardizer.transform(trajectory_embedding, copy=None)
+            trajectory_embedding = self.standardizer.transform(trajectory_embedding)
         return trajectory_embedding
 
 

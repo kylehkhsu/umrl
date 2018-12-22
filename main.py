@@ -30,31 +30,31 @@ args.gamma = 1
 args.episode_length = 30
 args.num_steps = args.episode_length * 10
 args.fixed_start = True
-args.trajectory_embedding = 'avg'
+args.trajectory_embedding_type = 'avg'
 args.skew = False   # unused
 args.context = 'cluster_mean'     # or 'goal' for debugging
 args.obs = 'pos_speed'
 args.sparse_reward = False
 args.uniform_cluster_categorical = True     # max I(z;w) = H(z) - H(z|w) => True
-args.num_updates = 500
+args.num_updates = 1000
 args.clustering_period = args.num_updates // 20
 args.save_interval = args.clustering_period
 args.fit_on_entire_history = True
-args.component_weight_threshold = 1e-5
+args.component_weight_threshold = 1e-7
 args.reward = 'z|w'     # or l2 or 'z|w'
-args.entropy_coef = 0  # default: 0.01
+args.entropy_coef = 0.01  # default: 0.01
 args.standardize_embeddings = True
 args.component_constraint_l_inf = 0.1
 args.component_constraint_l_2 = 0.1
-args.max_components = 50
-
+args.max_components = 100
+args.custom_transform = False
 
 # num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
 # logging stuff
-args.log_dir = './output/point2d/20181220/z|w'
+args.log_dir = './output/point2d/20181220/z_given_w_entropy'
 # args.log_dir = './output/debug/20181218/clustering_z|w'
 
 
@@ -121,7 +121,7 @@ def train():
     episode_rewards = deque(maxlen=10)
 
     for j in range(args.num_updates):
-        if (j + 1) % args.clustering_period == 0:
+        if j % args.clustering_period == 0 and j != 0:
             rewarder.fit_generative_model()
         raw_obs = envs.reset()
         obs_context = rewarder.reset(raw_obs)
