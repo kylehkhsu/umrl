@@ -660,8 +660,8 @@ class GaussianMixture(BaseMixture):
 
         weights, means, covariances = _estimate_gaussian_parameters(
             X, resp, self.reg_covar, self.covariance_type)
-        # weights /= n_samples
-        weights /= (n_samples * n_time_steps)
+        weights /= n_samples
+        # weights /= (n_samples * n_time_steps)   # based on Abhishek's gmm.py
 
         self.weights_ = (weights if self.weights_init is None
                          else self.weights_init)
@@ -696,8 +696,8 @@ class GaussianMixture(BaseMixture):
         self.weights_, self.means_, self.covariances_ = (
             _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
                                           self.covariance_type))
-        # self.weights_ /= n_samples
-        self.weights_ /= (n_samples * n_time_steps)
+        self.weights_ /= n_samples
+        # self.weights_ /= (n_samples * n_time_steps)   # based on Abhishek's gmm.py
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)
 
