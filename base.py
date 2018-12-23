@@ -48,18 +48,18 @@ def _check_X(X, n_components=None, n_features=None, ensure_min_samples=1):
 
     Returns
     -------
-    X : array, shape (n_samples, n_features)
+    X : array, shape (n_samples, n_time_steps, n_features)
     """
-    X = check_array(X, dtype=[np.float64, np.float32],
-                    ensure_min_samples=ensure_min_samples)
+    # X = check_array(X, dtype=[np.float64, np.float32],
+    #                 ensure_min_samples=ensure_min_samples)
     if n_components is not None and X.shape[0] < n_components:
         raise ValueError('Expected n_samples >= n_components '
                          'but got n_components = %d, n_samples = %d'
                          % (n_components, X.shape[0]))
-    if n_features is not None and X.shape[1] != n_features:
+    if n_features is not None and X.shape[2] != n_features:
         raise ValueError("Expected the input data X have %d features, "
                          "but got %d features"
-                         % (n_features, X.shape[1]))
+                         % (n_features, X.shape[2]))
     return X
 
 
@@ -135,14 +135,15 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape  (n_samples, n_features)
+        X : array-like, shape  (n_samples, n_time_steps, n_features)
 
         random_state : RandomState
             A random number generator instance.
         """
-        n_samples, _ = X.shape
+        n_samples, _, _ = X.shape
 
         if self.init_params == 'kmeans':
+            raise NotImplementedError   # kmeans on states w/o trajectory-label constraint seems dangerous
             resp = np.zeros((n_samples, self.n_components))
             label = cluster.KMeans(n_clusters=self.n_components, n_init=1,
                                    random_state=random_state).fit(X).labels_
@@ -162,7 +163,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape  (n_samples, n_features)
+        X : array-like, shape  (n_samples, n_time_steps, n_features)
 
         resp : array-like, shape (n_samples, n_components)
         """
@@ -228,7 +229,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         random_state = check_random_state(self.random_state)
 
-        n_samples, _ = X.shape
+        n_samples, n_time_steps, _ = X.shape
         for init in range(n_init):
             self._print_verbose_msg_init_beg(init)
 
@@ -327,7 +328,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
+        X : array-like, shape (n_samples, n_time_steps, n_features)
             List of n_features-dimensional data points. Each row
             corresponds to a single data point.
 
@@ -346,7 +347,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_dimensions)
+        X : array-like, shape (n_samples, n_time_steps, n_dimensions)
             List of n_features-dimensional data points. Each row
             corresponds to a single data point.
 
@@ -362,7 +363,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
+        X : array-like, shape (n_samples, n_time_steps, n_features)
             List of n_features-dimensional data points. Each row
             corresponds to a single data point.
 
@@ -380,7 +381,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
+        X : array-like, shape (n_samples, n_time_steps, n_features)
             List of n_features-dimensional data points. Each row
             corresponds to a single data point.
 
@@ -396,6 +397,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
         return np.exp(log_resp)
 
     def sample(self, n_samples=1):
+        raise NotImplementedError
         """Generate random samples from the fitted Gaussian distribution.
 
         Parameters
@@ -449,7 +451,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
+        X : array-like, shape (n_samples, n_time_steps, n_features)
 
         Returns
         -------
@@ -475,7 +477,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
+        X : array-like, shape (n_samples, n_time_steps, n_features)
 
         Returns
         -------
@@ -492,7 +494,7 @@ class BaseMixture(six.with_metaclass(ABCMeta, DensityMixin, BaseEstimator)):
 
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
+        X : array-like, shape (n_samples, n_time_steps, n_features)
 
         Returns
         -------
