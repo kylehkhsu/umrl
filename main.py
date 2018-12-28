@@ -33,7 +33,7 @@ args.fixed_start = True
 args.trajectory_embedding_type = 'avg'
 args.skew = False   # unused
 args.context = 'cluster_mean'     # or 'goal' for debugging
-args.obs = 'pos_speed'
+args.obs = 'pos'
 args.sparse_reward = False
 args.uniform_cluster_categorical = True     # max I(z;w) = H(z) - H(z|w) => True
 args.num_updates = 1000
@@ -48,18 +48,19 @@ args.component_constraint_l_inf = 0.1
 args.component_constraint_l_2 = 0.1
 args.max_components = 100
 args.custom_transform = False
+args.e_step = False
 
 # num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
 # logging stuff
-args.log_dir = './output/point2d/20181220/z_given_w_entropy'
-# args.log_dir = './output/debug/20181218/clustering_z|w'
+# args.log_dir = './output/point2d/20181228/z_given_w_entropy'
+args.log_dir = './output/debug/20181218/pos'
 
 
 def train():
-    logger.configure(dir=args.log_dir, format_strs=['stdout', 'log', 'csv'])
+    logger.configure(dir=args.log_dir, format_strs=['stdout', 'log', 'csv', 'tensorboard'])
     json.dump(vars(args), open(os.path.join(args.log_dir, 'params.json'), 'w'))
 
     if args.cuda and torch.cuda.is_available() and args.cuda_deterministic:
@@ -97,8 +98,11 @@ def train():
     starting_trajectories = []
     for i in range(args.num_processes * args.num_steps):
         embedding = torch.rand(obs_shape)
-        embedding = embedding * torch.Tensor([1, 1, 0.5])
-        embedding = embedding - torch.Tensor([0.5, 0.5, 0])
+        if args.obs == 'pos_speed':
+            embedding = embedding * torch.Tensor([1, 1, 0.5])
+            embedding = embedding - torch.Tensor([0.5, 0.5, 0])
+        elif args.obs == 'pos':
+            embedding = embedding - torch.Tensor([0.5, 0.5])
         embedding = embedding.unsqueeze(0)
         starting_trajectories.append(embedding)
 
