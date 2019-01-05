@@ -10,6 +10,7 @@ from collections import defaultdict
 import os
 import math
 import ipdb
+from sklearn.exceptions import NotFittedError
 
 from matplotlib.animation import FuncAnimation
 
@@ -24,32 +25,24 @@ class Args:
         pass
 
 
-def get_make_vis_dir(args):
-    vis_dir = os.path.join(args.log_dir, 'vis')
+def get_make_vis_dir(history):
+    vis_dir = os.path.join(history.args.log_dir, 'vis')
     os.makedirs(vis_dir, exist_ok=True)
     return vis_dir
 
 
-def make_gif(iteration, args, history, skip_if_exists=True):
-    i = iteration
-
-    vis_dir = get_make_vis_dir(args)
-    gif_name = os.path.join(vis_dir, 'iteration_{}.gif'.format(i))
-    png_name = os.path.join(vis_dir, 'iteration_{}.png'.format(i))
-    if skip_if_exists and os.path.isfile(gif_name):
-        print('{} exists; skipping.'.format(gif_name))
+def make_gif(i_clustering, history, skip_if_exists=True):
+    vis_dir = get_make_vis_dir(history)
+    filename = os.path.join(vis_dir, 'iteration_{}.{}'.format(i_clustering, history.args.vis_type))
+    if skip_if_exists and os.path.isfile(filename):
+        print('{} exists; skipping.'.format(filename))
         return
 
-    iteration = history.all[i]
+    iteration = history.all[i_clustering]
     generative_model = iteration['generative_model']
     standardizer = iteration['standardizer']
     episodes = iteration['episodes']
     T = history.args.episode_length
-    if not generative_model.__class__.__name__ == 'Discriminator':
-        means = generative_model.means_
-        covs = generative_model.covariances_
-        if history.args.standardize_data:
-            means = standardizer.inverse_transform(means)
 
     def sort_episodes_by_task(episodes):
         tasks = defaultdict(list)
@@ -67,7 +60,7 @@ def make_gif(iteration, args, history, skip_if_exists=True):
     else:
         max_components = 50
 
-    fig, axes = plt.subplots(nrows=math.ceil(max_components / 10), ncols=10, sharex=True, sharey=True,
+    fig, axes = plt.subplots(nrows=math.ceil(max_components / 10), ncols=10, sharex='all', sharey='all',
                              figsize=[50, 5 * math.ceil(max_components / 10)])
     scats = []
     axes = axes.reshape([-1])
@@ -84,25 +77,47 @@ def make_gif(iteration, args, history, skip_if_exists=True):
         ax.add_patch(patches.Rectangle((-5.5, 1.5), width=1, height=6, color='black'))
         ax.add_patch(patches.Rectangle((-0.5, -5.5), width=7, height=1, color='black'))
 
-        if not generative_model.__class__.__name__ == 'Discriminator':
-            # component ellipse
-            v, w = np.linalg.eigh(covs[i_component])
-            v = 2. * np.sqrt(2.) * np.sqrt(v)
-            u = w[0] / np.linalg.norm(w[0])
-            angle = np.arctan(u[1] / u[0])
-            angle = 180. * angle / np.pi  # convert to degrees
-            ell = patches.Ellipse(means[i_component], v[0], v[1], 180. + angle, color='green')
-            ell.set_clip_box(ax.bbox)
-            ell.set_alpha(0.3)
-            ax.add_artist(ell)
+        if history.args.vis_type == 'png':  # else gif, handled in update()
+            states = tasks[i_component].numpy()
+            states = states.reshape([-1, states.shape[-1]])
+            ax.scatter(states[:, 0], states[:, 1], s=2**2, c='black', marker='o')
+        if generative_model:
+            if generative_model.__class__.__name__ == 'Discriminator':
+                ax.set_title('skill {}'.format(i_component))
+            else:   # EM
+                try:
+                    generative_model._check_is_fitted()
+                    fitted = True
+                except NotFittedError:
+                    fitted = False
 
-            # # mean
-            # ax.scatter(means[i_component, 0], means[i_component, 1],
-            #            edgecolors='g', s=30 ** 2, facecolors='none', linewidths=6)
-            ax.set_title('(x, y, speed): {}'.format(np.round(means[i_component], decimals=3)))
+                if fitted:
+                    means = generative_model.means_
+                    covs = generative_model.covariances_
+                    if history.args.standardize_data:
+                        means = standardizer.inverse_transform(means)
+
+                    # component ellipse
+                    v, w = np.linalg.eigh(covs[i_component])
+                    v = 2. * np.sqrt(2.) * np.sqrt(v)
+                    u = w[0] / np.linalg.norm(w[0])
+                    angle = np.arctan(u[1] / u[0])
+                    angle = 180. * angle / np.pi  # convert to degrees
+                    ell = patches.Ellipse(means[i_component], v[0], v[1], 180. + angle, color='green')
+                    ell.set_clip_box(ax.bbox)
+                    ell.set_alpha(0.3)
+                    ax.add_artist(ell)
+
+                    if history.args.cluster_on == 'trajectory_embedding':
+                        ax.scatter(means[i_component, 0], means[i_component, 1],
+                                   edgecolors='g', s=30 ** 2, facecolors='none', linewidths=6)
+                    ax.set_title('(x, y): {}'.format(np.round(means[i_component], decimals=3)))
         else:
-            mean_trajectory = np.mean(tasks[i_component].numpy(), axis=0)
-            ax.plot(mean_trajectory[:, 0], mean_trajectory[:, 1], 'g-')
+            ax.set_title('unfitted')
+
+        # mean trajectory
+        mean_trajectory = np.mean(tasks[i_component].numpy(), axis=0)
+        ax.plot(mean_trajectory[:, 0], mean_trajectory[:, 1], 'c-', linewidth=8)
 
     def update(t):
         for i_plot, i_component in enumerate(sorted(tasks.keys())):
@@ -120,15 +135,15 @@ def make_gif(iteration, args, history, skip_if_exists=True):
         return scats, axes
     if history.args.vis_type == 'gif':
         anim = FuncAnimation(fig, update, frames=T, interval=100)
-        anim.save(gif_name, writer='imagemagick', fps=10)
+        anim.save(filename, writer='imagemagick', fps=10)
     elif history.args.vis_type == 'png':
-        fig.savefig(png_name)
+        fig.savefig(filename)
     plt.close('all')
     return
 
 
-def make_html(args):
-    vis_dir = get_make_vis_dir(args)
+def make_html(history):
+    vis_dir = get_make_vis_dir(history)
     contents = os.listdir(vis_dir)
     names = list(filter(lambda content: content[-4:] in ['.gif', '.png'] and content.find('_') != -1, contents))
 
@@ -152,31 +167,34 @@ def make_html(args):
 
         table.addRow(row)
 
-    tw = TableWriter(table, args.log_dir, rowsPerPage=min(max(1, len(names_and_iters)), 100))
+    tw = TableWriter(table, history.args.log_dir, rowsPerPage=min(max(1, len(names_and_iters)), 1000))
     tw.write()
 
 
-def visualize(args, history, just_one=True):
+def visualize(history, which='last'):
     if len(history.all) == 0:
         return
-    make_html(args)
-    if just_one:
+    make_html(history)
+    if which == 'last':
         iteration = len(history.all) - 1
-        make_gif(iteration, args, history, skip_if_exists=True)
-        make_html(args)
-    else:
+        make_gif(iteration, history, skip_if_exists=False)
+        make_html(history)
+    elif which == 'all':
         num_iterations = len(history.all)
         for i in range(num_iterations - 1, -1, -1):
-            make_gif(i, args, history, skip_if_exists=True)
-            make_html(args)
+            make_gif(i, history, skip_if_exists=True)
+            make_html(history)
 
-
-if __name__ == '__main__':
+def main():
     args = Args()
     # args.log_dir = '/home/kylehsu/experiments/umrl/output/point2d/20181231/entropy0.03_gaussian_components25'
     args.log_dir = '/home/kylehsu/experiments/umrl/output/point2d/20190101/disc_entropy0.03_components100_length100'
     history_shell = History(args)
     history = pickle.load(open(history_shell.filename, 'rb'))
-    visualize(args, history, just_one=True)
+    visualize(history, which='all')
+
+
+if __name__ == '__main__':
+    main()
 
 

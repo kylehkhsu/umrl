@@ -20,7 +20,7 @@ from multiworld.envs.pygame.point2d import Point2DEnv, Point2DTrajectoryEnv
 from visualize import visualize
 
 args = get_args()
-args.clusterer = 'discriminator'     # bayesian or gaussian or discriminator
+args.clusterer = 'gaussian'     # bayesian or gaussian or discriminator
 
 if args.clusterer == 'discriminator':
 
@@ -36,7 +36,7 @@ if args.clusterer == 'discriminator':
     args.fixed_start = True
     args.sparse_reward = False
 
-    args.episode_length = 100
+    args.episode_length = 30
     args.num_processes = 10
     args.trajectories_per_update = 200
     args.trajectories_per_process_per_update = args.trajectories_per_update // args.num_processes
@@ -50,23 +50,24 @@ if args.clusterer == 'discriminator':
     args.cluster_subsample_strategy = 'all'  # random or last or something_else=all
     args.keep_entire_history = False
 
-    args.visualize_period = 50
     args.context = 'one_hot'     # cluster_mean or goal or one_hot
     args.trajectory_embedding_type = 'avg'
     args.task_sampling = 'uniform'     # max_I or uniform or EM
     args.save_interval = 50
     args.component_weight_threshold = 1e-7
     args.reward = 'z|w'     # w|z or l2 or z|w
-    args.entropy_coef = 0.02  # default: 0.01
+    args.entropy_coef = 0.003  # default: 0.01
     args.standardize_data = False
     args.component_constraint_l_inf = 0.01
     args.component_constraint_l_2 = 0.01
-    args.max_components = 100
+    args.max_components = 50
     args.cluster_on = 'state'   # state or trajectory_embedding
     args.weight_concentration_prior = 1e8    # 1 or 1000 or 100000
     args.vis_type = 'png'
+    args.visualize_period = 10
 
-    args.log_dir = './output/point2d/20190101/disc_entropy0.02_components100_length100'
+    args.log_dir = './output/point2d/20190102/disc_entropy0.003'
+    # args.log_dir = './output/debug/20190102/disc'
 else:
     args.cuda = False
     args.algo = 'ppo'
@@ -82,36 +83,41 @@ else:
 
     args.episode_length = 30
     args.num_processes = 10
-    args.trajectories_per_update = 100
+    args.trajectories_per_update = 200
     args.trajectories_per_process_per_update = args.trajectories_per_update // args.num_processes
     args.num_steps = args.episode_length * args.trajectories_per_process_per_update
     args.num_updates = 1000
-    args.num_clusterings = 20
+    args.num_clusterings = 50
     args.clustering_period = args.num_updates // args.num_clusterings
     args.trajectories_per_clustering = args.trajectories_per_process_per_update * args.num_processes \
         * args.clustering_period
-    args.cluster_subsample_num = 1000    # trajectories
-    args.cluster_subsample_strategy = 'all'  # random or last or something_else=all
+    args.cluster_subsample_num = 100000    # trajectories
+    args.cluster_subsample_strategy = 'random'  # random or last or skew or something_else=all
     args.keep_entire_history = True
 
     args.context = 'cluster_mean'     # cluster_mean or goal or one_hot
     args.trajectory_embedding_type = 'avg'
-    args.task_sampling = 'uniform'     # max_I or uniform or EM
-    args.save_interval = args.clustering_period
-    args.component_weight_threshold = 1e-7
-    args.reward = 'z|w'     # w|z or l2 or z|w
-    args.entropy_coef = 0.01  # default: 0.01
+    args.task_sampling = 'EM'     # max_I or uniform or EM
+    args.save_interval = 50
+    args.component_weight_threshold = 0
+    args.reward = 'w|z'     # w|z or l2 or z|w
+    args.conditional_coef = 0.8
+    args.entropy_coef = 0  # default: 0.01
     args.standardize_data = False
     args.component_constraint_l_inf = 0.01
     args.component_constraint_l_2 = 0.01
-    args.max_components = 25
-    args.cluster_on = 'trajectory_embedding'   # state or trajectory_embedding
+    args.max_components = 50
+    args.cluster_on = 'state'   # state or trajectory_embedding
     args.weight_concentration_prior = 1e8    # 1 or 1000 or 100000
+    args.vis_type = 'png'
+    args.visualize_period = args.clustering_period
+    args.log_EM = True
 
-    # args.log_dir = './output/point2d/20181231/entropy0.01_gamma1e8_clusteron-trajemb_sample-all'
+
+    args.log_dir = './output/point2d/20190103/gen-state_entropy0_conditional0.8_pz-EM'
+    # args.log_dir = './output/debug/20190103/w_given_z'
 
 assert not args.standardize_data
-assert args.reward == 'z|w'
 if args.clusterer == 'discriminator':
     assert args.cluster_on == 'state'
     assert args.context == 'one_hot'
@@ -120,7 +126,13 @@ if args.clusterer == 'discriminator':
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
+
 def train():
+    if os.path.isdir(args.log_dir):
+        ans = input('{} exists\ncontinue and overwrite? y/n: '.format(args.log_dir))
+        if ans == 'n':
+            return
+
     logger.configure(dir=args.log_dir, format_strs=['stdout', 'log', 'csv'])
     logger.log(args)
     json.dump(vars(args), open(os.path.join(args.log_dir, 'params.json'), 'w'))
@@ -163,23 +175,9 @@ def train():
     env_step_time = 0
     visualize_time = 0
 
-    starting_trajectories = []
-    for i in range(10):
-        obs = envs.reset()
-        trajectory = []
-        for j in range(args.episode_length):
-            trajectory.append(obs)
-            action = (torch.rand(args.num_processes, envs.action_space.shape[0]) - 0.5) * 2 * args.action_limit
-            obs, _, _, _ = envs.step(action)
-        starting_trajectories.append(torch.stack(trajectory, dim=1))
-    starting_trajectories = torch.cat(starting_trajectories, dim=0)
-
     rewarder = Rewarder(args,
                         obs_shape=obs_shape,
                         logger=logger)
-    rewarder_fit_start = time.time()
-    rewarder.fit_generative_model(starting_trajectories)
-    rewarder_fit_time += time.time() - rewarder_fit_start
 
     actor_critic = Policy(obs_context_shape, envs.action_space,
                           base_kwargs={'recurrent': args.recurrent_policy})
@@ -249,12 +247,21 @@ def train():
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
         policy_update_start = time.time()
-        value_loss, action_loss, dist_entropy = agent.update(rollouts)
+        if rewarder.clustering_counter == 0:
+            value_loss, action_loss, dist_entropy = 0, 0, 0
+        else:
+            value_loss, action_loss, dist_entropy = agent.update(rollouts)
         policy_update_time += time.time() - policy_update_start
 
         rollouts.after_update()
 
         reward_avg = rollouts.rewards.sum() / len((rollouts.masks == 0).nonzero())
+
+        if j % args.visualize_period == 0:
+            print('making visualization')
+            visualize_start = time.time()
+            visualize(rewarder.history, which='last')
+            visualize_time += time.time() - visualize_start
 
         logger.logkv('value_loss', value_loss)
         logger.logkv('action_loss', action_loss)
@@ -287,14 +294,10 @@ def train():
             torch.save(save_model, os.path.join(args.log_dir, args.env_name + ".pt"))
             if j == args.num_updates - 1:
                 rewarder.history.new()    # there won't be a new fit_generative_model() call
+                visualize(rewarder.history, which='all')
             rewarder.history.dump()
             print('saved model and history')
 
-        if j % args.visualize_period == 0 or j == args.num_updates - 1:
-            print('making visualization')
-            visualize_start = time.time()
-            visualize(args, rewarder.history)
-            visualize_time += time.time() - visualize_start
 
 from a2c_ppo_acktr.utils import get_render_func
 

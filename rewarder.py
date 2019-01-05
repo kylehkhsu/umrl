@@ -28,10 +28,10 @@ class History(object):
         self.all = []
 
     def new(self):
-        if self.generative_model is not None and len(self.episodes) > 0:
-            self.all.append(dict(generative_model=self.generative_model,
-                                 standardizer=self.standardizer,
-                                 episodes=self.episodes))
+        assert len(self.episodes) > 0
+        self.all.append(dict(generative_model=self.generative_model,
+                             standardizer=self.standardizer,
+                             episodes=self.episodes))
         self.generative_model = None
         self.standardizer = None
         self.episodes = []
@@ -72,7 +72,7 @@ class Rewarder(object):
         self.clustering_counter = 0
         # self.encoding_function = lambda x: x
         self.context = [
-            np.zeros(shape=obs_shape, dtype=np.float32) for i in range(args.num_processes)
+            np.zeros(shape=(1, obs_shape[0]), dtype=np.float32) for i in range(args.num_processes)
         ]
         self.tasks = []
         self.task_current = [
@@ -107,44 +107,40 @@ class Rewarder(object):
         elif self.args.clusterer == 'discriminator':
             self.generative_model = Discriminator(input_size=self.obs_shape[0],
                                                   output_size=self.args.max_components)
+        else:
+            raise ValueError
 
-        self.valid_components = None
+        self.valid_components = np.array([0])
+        self.p_z = np.array([1])
+
         self.standardizer = StandardScaler()
-        self.p_z = None
         self.logger = logger
         self.discriminator_loss = 0
 
-    def fit_generative_model(self, data=None):
+    def fit_generative_model(self):
         # if self.clustering_counter > 0:
             # ipdb.set_trace()
         self.history.new()
-        if data is not None:    # first fitting
-            assert self.clustering_counter == 0
-            if self.args.cluster_on == 'trajectory_embedding' and self.args.trajectory_embedding_type == 'avg':
-                assert data.dim() == 3 and data.shape[1] == self.args.episode_length
-                data = torch.mean(data, dim=1)
-            elif self.args.cluster_on == 'state':
-                # data = torch.cat(data, dim=0)
-                data = torch.reshape(data, [-1, data.shape[-1]])
-            else:
-                raise ValueError
-            tasks = []
+
+        if self.args.cluster_on == 'trajectory_embedding':
+            data_list = self.raw_trajectory_embeddings
+            assert self.generative_model.group is None
+        elif self.args.cluster_on == 'state':
+            data_list = self.raw_trajectories
         else:
-            if self.args.cluster_on == 'trajectory_embedding':
-                data = torch.cat(self.raw_trajectory_embeddings, dim=0)
-                assert self.generative_model.group is None
-            elif self.args.cluster_on == 'state':
-                if self.args.cluster_subsample_strategy == 'last':
-                    data = torch.cat(self.raw_trajectories[-self.args.cluster_subsample_num:], dim=0)
-                    tasks = self.tasks[-self.args.cluster_subsample_num:]
-                elif self.args.cluster_subsample_strategy == 'random' and len(self.raw_trajectories) > self.args.cluster_subsample_num:
-                    indices = np.random.choice(len(self.raw_trajectories), self.args.cluster_subsample_num, replace=False)
-                    subset = [self.raw_trajectories[index] for index in indices]
-                    data = torch.cat(subset, dim=0)
-                    tasks = [self.tasks[index] for index in indices]
-                else:
-                    data = torch.cat(self.raw_trajectories, dim=0)
-                    tasks = self.tasks
+            raise ValueError
+        tasks = self.tasks
+
+        if self.args.cluster_subsample_strategy == 'last':
+            data_list = data_list[-self.args.cluster_subsample_num:]
+            tasks = tasks[-self.args.cluster_subsample_num:]
+        elif self.args.cluster_subsample_strategy == 'random' and len(data_list) > self.args.cluster_subsample_num:
+            indices = np.random.choice(len(data_list), self.args.cluster_subsample_num, replace=False)
+            data_list = [data_list[index] for index in indices]
+            tasks = [tasks[index] for index in indices]
+        # else keep it all
+
+        data = torch.cat(data_list, dim=0)
 
         if not self.args.keep_entire_history:
             self.raw_trajectory_embeddings = []
@@ -153,17 +149,14 @@ class Rewarder(object):
 
         if self.args.standardize_data:
             self.standardizer.fit(data)
-
-        data = self._get_standardized_data(data)
+            data = self._get_standardized_data(data)
 
         if self.args.clusterer == 'discriminator':
             assert self.args.cluster_on == 'state'
             self._train_discriminator(data, tasks)
-            self.valid_components = np.arange(self.args.max_components)
-            self.p_z = np.ones(self.args.max_components) / self.args.max_components
-            self.logger.log('clustering_counter: {}'.format(self.clustering_counter))
             self.clustering_counter += 1
-            self.history.save_generative_model(self.generative_model, self.standardizer)
+            self.logger.log('clustering_counter: {}'.format(self.clustering_counter))
+            # self.history.save_generative_model(self.generative_model, self.standardizer)
         else:
             self.generative_model.fit(data)
 
@@ -181,9 +174,10 @@ class Rewarder(object):
                     valid_components.append(component)
             self.valid_components = np.array(valid_components)
 
-            self.logger.log('clustering_counter: {}'.format(self.clustering_counter))
-            self.logger.log('raw means of valid components:\n{}'.format(self._get_raw_means(self.valid_components)))
-            self.logger.log('standardized means of valid components:\n{}'.format(self.generative_model.means_[self.valid_components]))
+            if self.args.log_EM:
+                self.logger.log('clustering_counter: {}'.format(self.clustering_counter))
+                self.logger.log('raw means of valid components:\n{}'.format(self._get_raw_means(self.valid_components)))
+                self.logger.log('standardized means of valid components:\n{}'.format(self.generative_model.means_[self.valid_components]))
 
             self.clustering_counter += 1
             self.history.save_generative_model(self.generative_model, self.standardizer)
@@ -244,8 +238,9 @@ class Rewarder(object):
         else:
             raise ValueError
 
-        self.logger.log('max I p_z: {}'.format(p_z))
-        self.logger.log('EM p_z: {}'.format(p_z_EM))
+        if self.args.log_EM:
+            self.logger.log('max I p_z: {}'.format(p_z))
+            self.logger.log('EM p_z: {}'.format(p_z_EM))
 
     def _sample_task_one(self, i_process):
         if self.args.context == 'goal':
@@ -257,7 +252,8 @@ class Rewarder(object):
             self.task_current[i_process] = z
             self.task_index_current[i_process] = np.argwhere(self.valid_components == z)[0][0]
             if self.args.context == 'cluster_mean':
-                self.context[i_process] = self._get_raw_means(z).astype(np.float32)
+                if self.clustering_counter != 0:
+                    self.context[i_process] = self._get_raw_means(z).astype(np.float32)
             elif self.args.context == 'one_hot':
                 context = np.zeros(self.args.max_components, dtype=np.float32)
                 context[z] = 1
@@ -325,18 +321,32 @@ class Rewarder(object):
                                                              torch.from_numpy(self.task_index_current.astype(np.float32)))
             reward = reward.numpy()
         else:
-
-            log_gauss = _estimate_log_gaussian_prob(X,
-                                                    self.generative_model.means_,
-                                                    self.generative_model.precisions_cholesky_,
-                                                    self.generative_model.covariance_type)
-            gauss = np.exp(log_gauss[:, self.valid_components])
-            density = gauss * self.p_z[None, :]
-            density[density < 1e-300] = 1e-300
-            denominator = np.sum(density, axis=1)
-            numerator = density[np.arange(self.args.num_processes), self.task_index_current]
-            reward = np.log(numerator) - np.log(denominator)
-            reward = reward.astype(np.float32)
+            if self.clustering_counter == 0:
+                reward = np.zeros(X.shape[0], dtype=np.float32)
+            else:
+                if self.args.reward == 'z|w':
+                    log_gauss = _estimate_log_gaussian_prob(X,
+                                                            self.generative_model.means_,
+                                                            self.generative_model.precisions_cholesky_,
+                                                            self.generative_model.covariance_type)
+                    gauss = np.exp(log_gauss[:, self.valid_components])
+                    density = gauss * self.p_z[None, :]
+                    density[density < 1e-300] = 1e-300
+                    denominator = np.sum(density, axis=1)
+                    numerator = density[np.arange(self.args.num_processes), self.task_index_current]
+                    reward = np.log(numerator) - np.log(denominator)
+                    reward = reward.astype(np.float32)
+                elif self.args.reward == 'w|z':
+                    log_gauss = _estimate_log_gaussian_prob(X,
+                                                            self.generative_model.means_,
+                                                            self.generative_model.precisions_cholesky_,
+                                                            self.generative_model.covariance_type)
+                    gauss = np.exp(log_gauss[:, self.valid_components])
+                    joint = gauss * self.p_z[None, :]
+                    joint[joint < 1e-300] = 1e-300
+                    marginal = joint.sum(axis=1)
+                    conditional = joint[np.arange(self.args.num_processes), self.task_index_current]
+                    reward = - np.log(marginal) + self.args.conditional_coef * np.log(conditional)
         return reward
 
     def _calculate_reward_old(self, i_process, done):
@@ -433,12 +443,10 @@ class Rewarder(object):
         assert data.dim() == 2
 
         num_trajectories = data.shape[0] // self.args.episode_length
-        if tasks == []:
-            # tasks = torch.randint(low=0, high=self.args.max_components,
-            #                       size=(num_trajectories,))
-            return
-        else:
-            assert len(tasks) == num_trajectories
+        if self.clustering_counter == 0:
+            tasks = torch.randint(low=0, high=self.args.max_components,
+                                  size=(num_trajectories,))
+        assert len(tasks) == num_trajectories
         labels = []
         for task in tasks:
             labels.append(torch.ones(self.args.episode_length, dtype=torch.long) * task)
@@ -462,6 +470,9 @@ class Rewarder(object):
                 loss += loss_batch.item()
             # print('discriminator epoch {}\tloss {}'.format(epoch, loss/data.shape[0]))
         self.discriminator_loss = loss / data.shape[0]
+
+        self.valid_components = np.arange(self.args.max_components)
+        self.p_z = np.ones(self.args.max_components) / self.args.max_components
 
 
 def weight_init(module):
