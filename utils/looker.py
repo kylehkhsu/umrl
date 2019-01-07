@@ -1,14 +1,18 @@
 import sys
 sys.path.append(".")
-from .map import Map
-from .misc import make_html, load_model
+from utils.map import Map
+from utils.misc import make_html, load_model
 from rewarder import Rewarder, SupervisedRewarder
-from a2c_ppo_acktr.model import Policy, RL2Base
 import os
 import torch
 import imageio
 import numpy as np
 import json
+import re
+import ipdb
+from multiworld.envs.pygame.point2d import Point2DEnv, Point2DTrajectoryEnv
+from multiworld.envs.mujoco.classic_mujoco.half_cheetah import HalfCheetahEnv
+
 
 class Looker:
     def __init__(self, log_dir, sub_dir='vis'):
@@ -56,4 +60,18 @@ class Looker:
             imageio.mimwrite(os.path.join(self.args.log_dir, self.sub_dir, filename), video)
         make_html(self.args.log_dir, sub_dir='vis', extension='.mp4')
 
+    def look_all(self, sub_dir='ckpt'):
+        contents = os.listdir(os.path.join(self.args.log_dir, sub_dir))
+        regexp = re.compile('iteration_*(\d+).pt', flags=re.ASCII)
+        iterations = []
+        for content in contents:
+            match = regexp.search(content)
+            if match:
+                iterations.append(int(match[1]))
+        for iteration in sorted(iterations, reverse=True):
+            self.look(iteration)
 
+
+if __name__ == '__main__':
+    looker = Looker(log_dir='./output/debug/half-cheetah/20190106/rl2_tasks-direction-two_run4')
+    looker.look_all()
