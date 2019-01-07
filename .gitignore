@@ -115,6 +115,6 @@ dmypy.json
 .pyre/
 
 # Project specific
-output/
+output
 .idea/
 pyhtmlwriter/
