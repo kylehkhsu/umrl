@@ -6,6 +6,7 @@ from multiworld.core.serializable import Serializable
 from multiworld.envs.env_util import get_stat_in_paths, create_stats_ordered_dict, get_asset_full_path
 from multiworld.envs.mujoco.mujoco_env import MujocoEnv
 
+
 class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
     def __init__(self, action_scale=1, frame_skip=5, reward_type='vel_distance', indicator_threshold=.1, fixed_goal=5, fix_goal=False, max_speed=6):
         self.quick_init(locals())
@@ -172,8 +173,11 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
         self.sim.forward()
         self._state_goal = goal
 
+
 if __name__ == "__main__":
-    env = HalfCheetah()
-    env.get_goal()
-    env.step(np.array(1))
+    import ipdb
+    env = HalfCheetahEnv()
+    goal = env.get_goal()
+    obs, rew, done, info = env.step(np.array(1))
+    ipdb.set_trace()
     env.reset()

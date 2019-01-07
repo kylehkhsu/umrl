@@ -111,6 +111,7 @@ class MujocoEnv(gym.Env):
         if mode == 'rgb_array':
             width, height = 256, 256
             self._get_viewer().render(width=width, height=height)
+            # self._get_viewer().render()
             # window size used for old mujoco-py:
             # width, height = 4000, 4000
             data = self._get_viewer().read_pixels(width, height, depth=False)

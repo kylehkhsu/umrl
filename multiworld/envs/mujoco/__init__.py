@@ -20,6 +20,20 @@ def register_custom_envs():
     """
 
     register(
+        id='HalfCheetahVel-v0',
+        entry_point='multiworld.envs.mujoco.classic_mujoco.half_cheetah:HalfCheetahEnv',
+        kwargs={
+            'action_scale': 1,
+            'frame_skip': 5,
+            'reward_type': 'vel_distance',
+            'indicator_threshold': .1,
+            'fixed_goal': 5,
+            'fix_goal': False,
+            'max_speed': 6,
+        },
+    )
+
+    register(
         id='SawyerReachXYEnv-v1',
         entry_point='multiworld.envs.mujoco.sawyer_xyz.sawyer_reach:SawyerReachXYEnv',
         tags={
