@@ -11,7 +11,7 @@ from baselines.common.vec_env import VecEnvWrapper
 from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize as VecNormalize_
-
+import ipdb
 
 try:
     import dm_control2gym
@@ -44,6 +44,9 @@ def make_env(env_id, seed, rank, log_dir, add_timestep, allow_early_resets):
 
         env.seed(seed + rank)
 
+        if env.observation_space.__class__.__name__ == 'Dict':
+            env.space_dict = env.observation_space
+            env.observation_space = env.observation_space.spaces['observation']
         obs_shape = env.observation_space.shape
 
         if add_timestep and len(
@@ -53,7 +56,6 @@ def make_env(env_id, seed, rank, log_dir, add_timestep, allow_early_resets):
         if log_dir is not None:
             env = bench.Monitor(env, os.path.join(log_dir, str(rank)),
                                 allow_early_resets=allow_early_resets)
-
         if is_atari:
             if len(env.observation_space.shape) == 3:
                 env = wrap_deepmind(env)
@@ -76,10 +78,11 @@ def make_vec_envs(env_name, seed, num_processes, gamma, log_dir, add_timestep,
     envs = [make_env(env_name, seed, i, log_dir, add_timestep, allow_early_resets)
             for i in range(num_processes)]
 
-    if len(envs) > 1:
-        envs = SubprocVecEnv(envs)
-    else:
-        envs = DummyVecEnv(envs)
+    # if len(envs) > 1:
+    #     envs = SubprocVecEnv(envs)
+    # else:
+    #     envs = DummyVecEnv(envs)
+    envs = SubprocVecEnv(envs)
 
     # if len(envs.observation_space.shape) == 1:
     #     if gamma is None:
