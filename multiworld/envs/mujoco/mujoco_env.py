@@ -78,7 +78,6 @@ class MujocoEnv(gym.Env):
         and so forth.
         """
         pass
-
     # -----------------------------
 
     def reset(self):
@@ -110,10 +109,10 @@ class MujocoEnv(gym.Env):
 
     def render(self, mode='human'):
         if mode == 'rgb_array':
-            self._get_viewer().render()
+            width, height = 256, 256
+            self._get_viewer().render(width=width, height=height)
             # window size used for old mujoco-py:
-            width, height = 500, 500
-            width, height = 4000, 4000
+            # width, height = 4000, 4000
             data = self._get_viewer().read_pixels(width, height, depth=False)
             # original image is upside-down, so flip it
             return data[::-1, :, :]
@@ -127,7 +126,15 @@ class MujocoEnv(gym.Env):
 
     def _get_viewer(self):
         if self.viewer is None:
-            self.viewer = mujoco_py.MjViewer(self.sim)
+
+            # offscreen render
+            self.viewer = mujoco_py.MjRenderContextOffscreen(self.sim, 0)
+            # self.viewer = mujoco_py.MjViewer(self.sim)
+
+            # track
+            self.viewer.cam.fixedcamid = 0
+            self.viewer.cam.type = 2
+
             self.viewer_setup()
         return self.viewer
 
