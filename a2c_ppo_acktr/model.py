@@ -249,6 +249,7 @@ class MLPBase(NNBase):
 
         return self.critic_linear(hidden_critic), hidden_actor, rnn_hxs
 
+
 class RL2Base(NNBase):
     def __init__(self, num_obs_dim, recurrent=False, hidden_size=128, num_act_dim=2):
         recurrent_input_size = hidden_size + 1 + 3  # + reward + flag

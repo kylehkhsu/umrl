@@ -281,6 +281,13 @@ class Point2DEnv(MultitaskEnv, Serializable):
             )
 
         self.drawer.fill(Color('white'))
+
+        self.drawer.draw_solid_circle(
+            np.array([10, 10]),
+            1,
+            Color('red')
+        )
+
         if self.show_goal:
             self.drawer.draw_solid_circle(
                 self._target_position,
