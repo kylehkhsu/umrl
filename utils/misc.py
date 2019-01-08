@@ -1,14 +1,10 @@
-from pyhtmlwriter.Element import Element
-from pyhtmlwriter.TableRow import TableRow
-from pyhtmlwriter.Table import Table
-from pyhtmlwriter.TableWriter import TableWriter
 import os
 import ipdb
 import re
-from collections import defaultdict
 import torch
 import copy
 from a2c_ppo_acktr.utils import get_vec_normalize
+import numpy as np
 
 
 def save_model(args, policy, envs, iteration, sub_dir='ckpt'):
@@ -23,35 +19,23 @@ def load_model(log_dir, iteration, sub_dir='ckpt'):
     return torch.load(os.path.join(log_dir, sub_dir, 'iteration_{}.pt'.format(iteration)))
 
 
-def make_html(root_dir, sub_dir='vis', extension='.mp4'):
-    contents = os.listdir(os.path.join(root_dir, sub_dir))
-    regexp = re.compile('iteration_*(\d+)-*(task_*.+){}'.format(extension), flags=re.ASCII)
-    iter_to_media = defaultdict(list)
-    for filename in contents:
-        match = regexp.search(filename)
-        if match:
-            iter = int(match[1])
-            task_info = match[2]
-            iter_to_media[iter].append((filename, task_info))
+def guard_against_underflow(x):
+    x[x < 1e-300] = 1e-300
+    return x
 
-    table = Table()
-    for iter in sorted(iter_to_media.keys(), reverse=True):
-        row = TableRow(rno=iter)
 
-        e = Element()
-        e.addTxt('iteration {}'.format(iter))
-        row.addElement(e)
+def calculate_state_entropy(args, trajectories):
+    if 'Point2D' in args.env_name:
+        bins = 100
+        bounds = (np.array([-10, 0]), np.array([-10, 10]))
+    else:
+        raise ValueError
 
-        for (filename, task_info) in sorted(iter_to_media[iter], key=lambda x: x[1]):
-            e = Element()
-            e.addTxt(task_info)
-            e.addVideo(os.path.join(sub_dir, filename))
-            row.addElement(e)
-
-        table.addRow(row)
-    tw = TableWriter(table, outputdir=root_dir, rowsPerPage=len(iter_to_media))
-    tw.write()
+    data = torch.cat(trajectories, dim=0).numpy()
+    p_s = np.histogramdd(data, bins=bins, range=bounds, density=True)[0]
+    H_s = -np.sum(p_s * np.ma.log(p_s))
+    return H_s
 
 
 if __name__ == '__main__':
-    make_html('./output/debug/half-cheetah/20190106/rl2_tasks-direction-two_run3')
+    pass
