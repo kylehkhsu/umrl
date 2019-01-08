@@ -125,7 +125,7 @@ args = get_args()
 # objective optimization
 args.cuda = False
 args.algo = 'ppo'
-args.entropy_coef = 0.01
+args.entropy_coef = 0.1
 args.lr = 3e-4
 args.value_loss_coef = 0.1
 args.gamma = 0.99
@@ -138,16 +138,19 @@ args.interface = 'contextual'
 # args.env_name = 'Point2DWalls-center-v0'
 args.env_name = 'Point2DWalls-corner-v0'
 args.rewarder = 'unsupervised'    # supervised or unsupervised
-args.clusterer = 'dp-mog'  # mog or dp-mog or diayn
 args.obs = 'raw'
 
 # specific to args.rewarder == 'unsupervised'
-args.max_components = 10
+args.clusterer = 'mog'  # mog or dp-mog or diayn
+args.max_components = 50
 args.reward = 's|z' # s|z or z|s
 args.conditional_coef = 0
 args.rewarder_fit_period = 10
-args.subsample = 1000
-args.weight_concentration_prior = 1   # specific to dp-mog
+args.subsample_num = 5000
+args.weight_concentration_prior = 1e5   # specific to dp-mog
+args.subsample_strategy = 'random'    # skew or random
+args.subsample_power = -0.01   # specific to skewing
+args.context = 'all'   # mean or all
 
 # specific to args.rewarder == 'supervised' or supervised evaluation
 args.dense_coef = 1
@@ -159,16 +162,17 @@ args.task_type = 'goal'
 args.num_mini_batch = 5
 args.num_processes = 20
 args.trial_length = 1
-args.episode_length = 30
+args.episode_length = 50
 args.trials_per_update = 100
 args.trials_per_process_per_update = args.trials_per_update // args.num_processes
 args.num_steps = args.episode_length * args.trial_length * args.trials_per_process_per_update
-args.num_updates = 300
+args.num_updates = 1000
 
 # logging, saving, visualization
 args.save_period = args.rewarder_fit_period
 args.vis_period = args.rewarder_fit_period
-args.log_dir = './output/point2d/20190107/context_dp-mog_T30_update'
+args.log_dir = './output/point2d/20190108/context-all_mog_K50_T50_lambda0_ent0.1_N1000'
+# args.log_dir = './output/debug/point2d/20190108/context_dp-mog_T30_lambda0.8_context-all_ent0.01'
 args.look = False
 args.plot = True
 

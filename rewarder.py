@@ -40,12 +40,20 @@ class Rewarder:
 
 
 class UnsupervisedRewarder(Rewarder):
-    def __init__(self, args, **kwargs):
+    def __init__(self, args, obs_raw_shape, **kwargs):
         super(UnsupervisedRewarder, self).__init__(args, **kwargs)
 
         self.fit_counter = 0
         self.fit_counter_to_trajectories = []
+        self.fit_counter_to_component_ids = []
         self.fit_counter_to_models = []
+
+        if self.args.context == 'mean':
+            self.context_shape = obs_raw_shape
+        elif self.args.context == 'all':
+            self.context_shape = (obs_raw_shape[0] * 3,)    # mean and eigenvectors of cov
+        else:
+            raise ValueError
 
         if self.args.clusterer == 'mog':
             self.clusterer = \
@@ -71,9 +79,9 @@ class UnsupervisedRewarder(Rewarder):
             raise ValueError
 
         self.p_z = np.empty(self.args.max_components, dtype=np.float32)
-        self.component_id = np.empty(self.args.num_processes, dtype=np.int)
+        self.component_id = np.zeros(self.args.num_processes, dtype=np.int)
 
-    def _calculate_reward(self, task, obs_raw, action, **kwargs):
+    def _calculate_reward(self, _, obs_raw, action, **kwargs):
         if self.fit_counter == 0:
             return torch.zeros(self.args.num_processes)
 
@@ -99,23 +107,49 @@ class UnsupervisedRewarder(Rewarder):
             return None
         z = np.random.choice(self.args.max_components, size=1, replace=False, p=self.p_z)[0]
         self.component_id[i_process] = z
-        return self.clusterer.means_[z]
+        if self.args.context == 'mean':
+            task = self.clusterer.means_[z]
+        elif self.args.context == 'all':
+            task = np.concatenate([self.clusterer.means_[z], self.evecs[z]])
+        return task
 
-    def fit(self, trajectories=None):
-        self.append_trajectories(trajectories)  # add current update's trajectories
+    def fit(self, trajectories, component_ids):
+        self._pre_fit(trajectories, component_ids)
         data = list(chain(*self.fit_counter_to_trajectories))   # flatten list of lists
-        if self.args.subsample < len(data):
-            indices = np.random.choice(len(data), self.args.subsample, replace=True)
-            data = [data[index] for index in indices]
+        if self.args.subsample_num < len(data):
+            if self.args.subsample_strategy == 'random':
+                indices = np.random.choice(len(data), self.args.subsample_num, replace=True)
+                data = [data[index] for index in indices]
+            elif self.args.subsample_strategy == 'skew':
+                _data = torch.cat(data, dim=0)
+                log_s_given_z = _estimate_log_gaussian_prob(
+                    _data, self.clusterer.means_, self.clusterer.precisions_cholesky_, self.clusterer.covariance_type
+                )
+                # (i_trajectory, t, i_component)
+                log_s_given_z = log_s_given_z.reshape([-1, self.args.episode_length, log_s_given_z.shape[-1]])
+                log_tau_given_z = np.sum(log_s_given_z, axis=1)  # (i_trajectory, i_component)
+                log_tau_given_z = guard_against_underflow(log_tau_given_z)
+                tau_given_z = np.exp(log_tau_given_z)
+                tau_joint_z = tau_given_z * (self.p_z[None, :])
+                q_tau = np.sum(tau_joint_z, axis=1)   # (i_trajectory,)
+                assert np.min(q_tau) > 0
+                # p_tau /= np.sum(p_tau)    # redundant
+                skewed_q_tau = np.power(q_tau, self.args.subsample_power)
+                skewed_q_tau /= np.sum(skewed_q_tau)
+
+                indices = np.random.choice(len(data), self.args.subsample_num, replace=True, p=skewed_q_tau)
+                data = [data[index] for index in indices]
         # else keep it all
 
         data = torch.cat(data, dim=0)   # modified EM fitters take 2D input
         self.clusterer.fit(data, group=self.args.episode_length)
+        evals, evecs = np.linalg.eigh(self.clusterer.covariances_)
+        self.evecs = evecs.reshape([evecs.shape[0], -1])
 
         self.p_z = self.clusterer.weights_
         self.p_z /= self.p_z.sum()
 
-        self.end_fit()
+        self._post_fit()
 
     def append_model(self):
         self.fit_counter_to_models.append(deepcopy(self.clusterer))
@@ -127,12 +161,17 @@ class UnsupervisedRewarder(Rewarder):
         assert len(self.fit_counter_to_trajectories) == len(self.fit_counter_to_models)
         obj = dict(
             trajectories=self.fit_counter_to_trajectories,
-            models=self.fit_counter_to_models
+            component_ids=self.fit_counter_to_component_ids,
+            models=self.fit_counter_to_models,
         )
         filename = os.path.join(self.args.log_dir, 'history.pkl')
         pickle.dump(obj, open(filename, 'wb'))
 
-    def end_fit(self):
+    def _pre_fit(self, trajectories, component_ids):
+        self.fit_counter_to_trajectories.append(trajectories)
+        self.fit_counter_to_component_ids.append(component_ids)
+
+    def _post_fit(self):
         self.append_model()
         self.fit_counter += 1
         self.dump()

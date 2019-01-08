@@ -1,7 +1,7 @@
 import sys
 sys.path.append(".")
 from utils.map import Map
-from utils.misc import make_html, load_model
+from utils.misc import load_model
 from env_interface import RL2EnvInterface, ContextualEnvInterface
 import os
 import torch
@@ -13,6 +13,11 @@ import ipdb
 from multiworld.envs.pygame.point2d import Point2DEnv, Point2DTrajectoryEnv
 from multiworld.envs.mujoco.classic_mujoco.half_cheetah import HalfCheetahEnv
 
+from collections import defaultdict
+from pyhtmlwriter.Element import Element
+from pyhtmlwriter.TableRow import TableRow
+from pyhtmlwriter.Table import Table
+from pyhtmlwriter.TableWriter import TableWriter
 
 class Looker:
     def __init__(self, log_dir, sub_dir='vis'):
@@ -57,7 +62,7 @@ class Looker:
 
             filename = 'iteration_{}-task_{}.mp4'.format(iteration, task)
             imageio.mimwrite(os.path.join(self.args.log_dir, self.sub_dir, filename), video)
-        make_html(self.args.log_dir, sub_dir='vis', extension='.mp4')
+        self.make_html(self.args.log_dir, sub_dir='vis', extension='.mp4')
 
     def look_all(self, sub_dir='ckpt'):
         contents = os.listdir(os.path.join(self.args.log_dir, sub_dir))
@@ -72,6 +77,35 @@ class Looker:
 
     def __del__(self):
         self.envs.envs.close()
+
+    def make_html(self, root_dir, sub_dir='vis', extension='.mp4'):
+        contents = os.listdir(os.path.join(root_dir, sub_dir))
+        regexp = re.compile('iteration_*(\d+)-*(task_*.+){}'.format(extension), flags=re.ASCII)
+        iter_to_media = defaultdict(list)
+        for filename in contents:
+            match = regexp.search(filename)
+            if match:
+                iter = int(match[1])
+                task_info = match[2]
+                iter_to_media[iter].append((filename, task_info))
+
+        table = Table()
+        for iter in sorted(iter_to_media.keys(), reverse=True):
+            row = TableRow(rno=iter)
+
+            e = Element()
+            e.addTxt('iteration {}'.format(iter))
+            row.addElement(e)
+
+            for (filename, task_info) in sorted(iter_to_media[iter], key=lambda x: x[1]):
+                e = Element()
+                e.addTxt(task_info)
+                e.addVideo(os.path.join(sub_dir, filename))
+                row.addElement(e)
+
+            table.addRow(row)
+        tw = TableWriter(table, outputdir=root_dir, rowsPerPage=len(iter_to_media))
+        tw.write()
 
 
 if __name__ == '__main__':

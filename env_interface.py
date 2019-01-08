@@ -47,7 +47,7 @@ class MultiTaskEnvInterface(ABC):
         if self.args.rewarder == 'supervised' or mode == 'val':
             self.rewarder = SupervisedRewarder(args)
         elif self.args.rewarder == 'unsupervised':
-            self.rewarder = UnsupervisedRewarder(args)
+            self.rewarder = UnsupervisedRewarder(args, obs_raw_shape=self.obs_raw_shape)
         else:
             raise ValueError
 
@@ -190,17 +190,18 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
     def __init__(self, args, **kwargs):
         super(ContextualEnvInterface, self).__init__(args, **kwargs)
         self.trajectories_current_update = []
+        self.component_ids_current_update = []
         self.context = [
-            np.zeros(shape=(1, self.obs_raw_shape[0]), dtype=np.float32) for i in range(args.num_processes)
+            np.zeros(shape=(1, self.rewarder.context_shape[0]), dtype=np.float32) for i in range(args.num_processes)
         ]
-        self.obs_shape = (self.obs_raw_shape[0] * 2,)
+        self.obs_shape = (self.obs_raw_shape[0] + self.rewarder.context_shape[0],)
 
     def _reset_one(self, i_process, obs_raw, **kwargs):
         self.trajectory_current[i_process] = torch.zeros(size=self.obs_raw_shape).unsqueeze(0)
         self.trajectory_current[i_process][0][:obs_raw.shape[1]] = obs_raw[i_process]
         task = self._sample_task_one(i_process)
         if task is None:
-            task = np.zeros(self.obs_raw_shape)
+            task = np.zeros(self.rewarder.context_shape)
         self.set_task_one(task, i_process)
         self.step_counter[i_process] = 0
 
@@ -246,12 +247,18 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
 
     def _save_episode(self, i_process, **kwargs):
         self.trajectories_current_update.append(self.trajectory_current[i_process])
-        pass
+        self.component_ids_current_update.append(self.rewarder.component_id[i_process])
 
     def set_task_one(self, task, i_process=0):
         self.task_current[i_process] = task
         self.context[i_process] = np.expand_dims(task, axis=0)
 
     def fit_rewarder(self):
-        self.rewarder.fit(trajectories=self.trajectories_current_update)
+        self.rewarder.fit(trajectories=self.trajectories_current_update,
+                          component_ids=self.component_ids_current_update)
+
+        self._post_fit_rewarder()
+
+    def _post_fit_rewarder(self):
         self.trajectories_current_update = []
+        self.component_ids_current_update = []

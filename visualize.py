@@ -15,6 +15,7 @@ from itertools import chain
 from sklearn.exceptions import NotFittedError
 
 from matplotlib.animation import FuncAnimation
+from matplotlib.colors import LinearSegmentedColormap
 
 from pyhtmlwriter.Element import Element
 from pyhtmlwriter.TableRow import TableRow
@@ -61,7 +62,7 @@ def add_time(trajectories):
 
 
 def plot_per_fitting_iteration(history):
-    trajectories_all, models = history['trajectories'], history['models']
+    trajectories_all, component_ids_all, models = history['trajectories'], history['component_ids'], history['models']
 
     num_plots = len(models)
     num_cols = 5
@@ -80,8 +81,21 @@ def plot_per_fitting_iteration(history):
         trajectories = torch.stack(trajectories_all[i_fit]).numpy()
         trajectories = add_time(trajectories)
         states = trajectories.reshape([-1, trajectories.shape[-1]])
-        ax.scatter(states[:, 0], states[:, 1], s=0.25 ** 2, c=states[:, 2], marker='o')
+        ax.scatter(states[:, 0], states[:, 1], s=0.25**2, c=states[:, 2], marker='o')
 
+        # Evaluate an existing colormap from 0.5 (midpoint) to 1 (upper end)
+        cmap = plt.get_cmap('Greys')
+        colors = cmap(np.linspace(0.5, 1, cmap.N // 2))
+
+        # Create a new colormap from those colors
+        cmap_upper = LinearSegmentedColormap.from_list('Upper Half', colors)
+
+        component_ids = np.array(component_ids_all[i_fit])
+        component_ids_unique = np.unique(component_ids)
+        for indices in [np.argwhere(component_ids == component_id) for component_id in component_ids_unique]:
+            mean_trajectory = np.mean(trajectories[indices, :, :], axis=0, dtype=np.float64).squeeze(axis=0)
+            ax.scatter(mean_trajectory[:, 0], mean_trajectory[:, 1], c=mean_trajectory[:, 2],
+                       s=1**2, cmap=cmap_upper, marker='o')
 
         ax.set_title('fitting iteration {}'.format(i_fit))
 
@@ -102,7 +116,6 @@ def plot_previous_states_per_fitting_iteration(history):
         ax = axes[i_fit]
         setup_axes(ax)
         plot_components(ax, models[i_fit])
-
 
         trajectories = list(chain(*trajectories_all[:i_fit + 1]))
         if len(trajectories) > max_trajectories:
@@ -163,7 +176,7 @@ def make_html(root_dir, sub_dir='plt', extension='.png'):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--log-dir', default='./output/point2d/20190107/context_dp-mog_T30')
+    parser.add_argument('--log-dir', default='./output/point2d/20190108/context_dp-mog_T30_K10_lambda0.8_ent0.1_gamma0.99')
     args = parser.parse_args()
     plot_and_save(args.log_dir)
 

@@ -20,7 +20,13 @@ def load_model(log_dir, iteration, sub_dir='ckpt'):
 
 
 def guard_against_underflow(x):
-    x[x < 1e-300] = 1e-300
+    assert x.dtype == np.float64
+    if np.all(x <= 0):  # log-space
+        x[x < -600] = -600
+    elif np.all(x >= 0):    #
+        x[x < 1e-300] = 1e-300
+    else:
+        raise NotImplementedError
     return x
 
 
