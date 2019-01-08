@@ -69,7 +69,7 @@ class Rewarder:
         pass
 
     @abstractmethod
-    def _sample_task_one(self, i_process):
+    def _sample_task_one(self):
         pass
 
 
@@ -139,6 +139,7 @@ class SupervisedRewarder(Rewarder):
             elif self.args.tasks == 'ring':
                 vec = np.random.normal(size=2)
                 goal = 5 * vec / np.linalg.norm(vec, axis=0)
+
         elif self.args.env_name == 'Point2DWalls-corner-v0':
             if self.args.tasks == 'single':
                 goal = np.array([-2.5, -7.5])
@@ -158,6 +159,7 @@ class SupervisedRewarder(Rewarder):
                     goal = np.array([8, -8])
                 elif task_id == 3:
                     goal = np.array([-8, 8])
+
         elif self.args.env_name == 'HalfCheetahVel-v0':
             if self.args.task_type == 'direction':
                 if self.args.tasks == 'single':
@@ -195,7 +197,7 @@ class SupervisedRewarder(Rewarder):
             if self.args.task_type == 'direction':
                 if self.args.tasks == 'two':
                     tasks = np.array([-1, 1])
-        if self.args.env_name == 'Point2DWalls-center-v0':
+        elif self.args.env_name == 'Point2DWalls-center-v0':
             if self.args.tasks == 'four':
                 tasks = np.array([[5, 5],
                                   [5, -5],

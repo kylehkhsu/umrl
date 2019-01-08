@@ -32,14 +32,14 @@ class MultiTaskEnvInterface(ABC):
                                   allow_early_resets=True)
 
         if args.obs == 'raw':
-            self.obs_shape = self.envs.observation_space.shape
+            self.obs_raw_shape = self.envs.observation_space.shape
         else:
             raise ValueError
 
         self.action_space = self.envs.action_space
         self.tasks = []
 
-        self.trajectory_current = [torch.zeros(size=[1, self.obs_shape[0]]) for i in range(args.num_processes)]
+        self.trajectory_current = [torch.zeros(size=[1, self.obs_raw_shape[0]]) for i in range(args.num_processes)]
         self.task_current = [None for i in range(args.num_processes)]
         self.step_counter = [0 for i in range(args.num_processes)]
         self.args = args
@@ -70,6 +70,10 @@ class MultiTaskEnvInterface(ABC):
     def _save_episode(self, i_process, **kwargs):
         pass
 
+    @abstractmethod
+    def set_task_one(self, task, i_process):
+        pass
+
     def _calculate_reward(self, task, obs_raw, action, **kwargs):
         return self.rewarder._calculate_reward(task, obs_raw, action, **kwargs)
 
@@ -80,7 +84,7 @@ class MultiTaskEnvInterface(ABC):
 class RL2EnvInterface(MultiTaskEnvInterface):
     def __init__(self, args, **kwargs):
         super(RL2EnvInterface, self).__init__(args, **kwargs)
-
+        self.obs_shape = self.obs_raw_shape
         self.trajectories_pre = []
         self.trajectories_post = []
         # self.trajectory_embeddings_pre = []
@@ -90,7 +94,7 @@ class RL2EnvInterface(MultiTaskEnvInterface):
     def _reset_one(self, i_process, obs_raw, **kwargs):
         self.trajectory_current[i_process] = obs_raw[i_process].unsqueeze(0)
         if kwargs['trial_done'][i_process]:
-            self.task_current[i_process] = self._sample_task_one()
+            self.set_task_one(self._sample_task_one(), i_process)
             self.episode_counter[i_process] = 0
         self.step_counter[i_process] = 0
 
@@ -172,52 +176,67 @@ class RL2EnvInterface(MultiTaskEnvInterface):
         # self.history.save_episode(self.trajectory_current[i_process], self.task_current[i_process])
         # self.tasks.append(self.task_current[i_process])
 
+    def set_task_one(self, task, i_process=0):
+        self.task_current[i_process] = task
 
-class ContextualEnvInterface(MultiTaskEnvInterface, ABC):
+
+class ContextualEnvInterface(MultiTaskEnvInterface):
     def __init__(self, args, **kwargs):
         super(ContextualEnvInterface, self).__init__(args, **kwargs)
         self.context = [
-            np.zeros(shape=(1, self.obs_shape[0]), dtype=np.float32) for i in range(args.num_processes)
+            np.zeros(shape=(1, self.obs_raw_shape[0]), dtype=np.float32) for i in range(args.num_processes)
         ]
+        self.obs_shape = (self.obs_raw_shape[0] * 2,)
 
     def _reset_one(self, i_process, obs_raw, **kwargs):
-        self.trajectory_current[i_process] = torch.zeros(size=self.obs_shape).unsqueeze(0)
+        self.trajectory_current[i_process] = torch.zeros(size=self.obs_raw_shape).unsqueeze(0)
         self.trajectory_current[i_process][0][:obs_raw.shape[1]] = obs_raw[i_process]
-        self.task_current[i_process] = self._sample_task_one()
+        self.set_task_one(self._sample_task_one(), i_process)
         self.step_counter[i_process] = 0
 
-    def reset(self, obs_raw=None):
-        for i in range(self.args.num_processes):
-            self._reset_one(i, obs_raw)
-        return torch.cat(
-            [torch.cat(self.trajectory_current, dim=0), torch.from_numpy(np.concatenate(self.context, axis=0))], dim=1
-        )
+    def _get_obs(self, obs_raw):
+        context = torch.from_numpy(np.concatenate(self.context, axis=0).astype(dtype=np.float32))
+        return torch.cat([obs_raw, context], dim=1)
+
+    def reset(self):
+        obs_raw = self.envs.reset()
+        for i_process in range(self.args.num_processes):
+            self._reset_one(i_process, obs_raw)
+        obs = self._get_obs(obs_raw)
+        return obs
 
     def step(self, action):
         env_step_start = time.time()
-        obs_raw, _, _done, _ = self.envs.step(action)
+        obs_raw, _, done_raw, info_raw = self.envs.step(action)
         env_step_time = time.time() - env_step_start
-        assert not any(_done), 'environments should not reset on their own'
+        assert not any(done_raw), 'environments should not reset on their own'
 
         done = torch.zeros(self.args.num_processes)
-
         for i_process in range(self.args.num_processes):
             self.step_counter[i_process] += 1
-            done_ = self.step_counter[i_process] == self.args.episode_length
+            done_ = int(self.step_counter[i_process] == self.args.episode_length)
             if done_:
                 self._save_episode(i_process)
             else:
                 self._append_to_trajectory_one(i_process, obs_raw)
             done[i_process] = done_
         reward_start = time.time()
-        reward = self._calculate_reward(obs_raw, action, done)
+        reward = self._calculate_reward(self.task_current, obs_raw, action, env_info=info_raw)
         reward_time = time.time() - reward_start
+        reward = reward.unsqueeze(1)
 
-        reward = torch.from_numpy(reward).unsqueeze(1)
-        context = torch.from_numpy(np.concatenate(self.context, axis=0))
+        assert all(done) or not any(done)
+        if all(done):
+            obs = self.reset()
+        else:
+            obs = self._get_obs(obs_raw)
 
         info = dict(reward_time=reward_time, env_step_time=env_step_time)
-        return torch.cat([obs_raw, context], dim=1), reward, done, info
+        return obs, reward, done, info
 
     def _save_episode(self, i_process, **kwargs):
         pass
+
+    def set_task_one(self, task, i_process=0):
+        self.task_current[i_process] = task
+        self.context[i_process] = np.expand_dims(task, axis=0)

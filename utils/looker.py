@@ -17,7 +17,13 @@ from multiworld.envs.mujoco.classic_mujoco.half_cheetah import HalfCheetahEnv
 class Looker:
     def __init__(self, log_dir, sub_dir='vis'):
         self.args = Map(json.load(open(os.path.join(log_dir, 'params.json'), 'r')))
-        self.envs = RL2EnvInterface(self.args, mode='val')
+        if self.args.interface is None:
+            print('args.interface not set, default rl2')
+            self.args.interface = 'rl2'
+        if self.args.interface == 'contextual':
+            self.envs = ContextualEnvInterface(self.args, mode='val')
+        elif self.args.interface == 'rl2':
+            self.envs = RL2EnvInterface(self.args, mode='val')
         self.tasks = self.envs.rewarder.get_assess_tasks()
         self.sub_dir = sub_dir
         os.makedirs(os.path.join(self.args.log_dir, self.sub_dir), exist_ok=True)
@@ -25,7 +31,6 @@ class Looker:
         display = Display(visible=False, size=(256, 256))
         display.start()
         _ = self.envs.envs.get_images()
-
 
     def look(self, iteration=-1):
         # actor_critic, obs_rms = torch.load(os.path.join(self.args.log_dir, self.args.env_name + ".pt"))
@@ -35,7 +40,7 @@ class Looker:
             mask = torch.zeros(1, 1)
 
             obs = self.envs.reset()
-            self.envs.task_current[0] = task
+            self.envs.set_task_one(task)    # must come after reset since reset samples a task
             video = []
             video.extend(self.envs.envs.get_images())
             for t in range(self.args.episode_length * self.args.trial_length):
@@ -44,7 +49,10 @@ class Looker:
                         obs, recurrent_hidden_state, mask, deterministic=True
                     )
                 obs, rew, done, infos = self.envs.step(action)
-                masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done['trial']])
+                if self.args.interface == 'rl2':
+                    masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done['trial']])
+                elif self.args.interface == 'contextual':
+                    masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
                 video.extend(self.envs.envs.get_images())
 
             filename = 'iteration_{}-task_{}.mp4'.format(iteration, task)
@@ -62,8 +70,12 @@ class Looker:
         for iteration in sorted(iterations, reverse=True):
             self.look(iteration)
 
+    def __del__(self):
+        self.envs.envs.close()
+
 
 if __name__ == '__main__':
-    looker = Looker(log_dir='./output/debug/point2d/20190107/rl2_tasks-four_run0')
+    # looker = Looker(log_dir='./output/debug/half-cheetah/20190106/rl2_tasks-direction-two_run4')
+    looker = Looker(log_dir='./output/debug/point2d/20190107/context_tasks-four_run2')
     looker.look_all()
-    # looker.look(iteration=100)
+    # looker.look(iteration=999)

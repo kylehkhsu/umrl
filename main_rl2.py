@@ -33,6 +33,7 @@ args.use_linear_lr_decay = True
 
 # args.env_name = 'Point2DEnv-traj-v0'
 # args.env_name = 'Point2DEnv-v0'
+args.interface = 'rl2'
 args.env_name = 'Point2DWalls-center-v0'
 # args.env_name = 'HalfCheetahVel-v0'
 args.rewarder = 'supervised'
@@ -65,7 +66,6 @@ args.component_weight_threshold = 0
 args.reward = 'w|z'     # w|z or l2 or z|w
 args.conditional_coef = 0.8
 
-args.standardize_data = False
 args.component_constraint_l_inf = 0.01
 args.component_constraint_l_2 = 0.01
 args.max_components = 50
@@ -84,7 +84,6 @@ args.look = True
 args.log_dir = './output/debug/point2d/20190107/rl2_tasks-four_run1'
 
 # assert args.num_processes > 1   # shenanigans...
-assert not args.standardize_data
 if args.clusterer == 'discriminator':
     assert args.cluster_on == 'state'
     assert args.context == 'one_hot'
@@ -92,6 +91,7 @@ if args.clusterer == 'discriminator':
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 np.random.seed(args.seed)
+
 
 def train():
     if os.path.isdir(args.log_dir):
@@ -113,13 +113,8 @@ def train():
     visualize_time = 0
 
     envs = RL2EnvInterface(args)
-    # envs = SupervisedRewarder(args)
     if args.look:
         looker = Looker(args.log_dir)
-
-    # rewarder = Rewarder(args,
-    #                     obs_shape=obs_shape,
-    #                     logger=logger)
 
     actor_critic = Policy(envs.obs_shape, envs.action_space,
                           base=RL2Base, base_kwargs={'recurrent': True,
@@ -135,7 +130,7 @@ def train():
                         actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
 
-    def copy_obs_into_storage(obs):
+    def copy_obs_into_beginning_of_storage(obs):
         obs_raw, obs_act, obs_rew, obs_flag = obs
         rollouts.obs[0].copy_(obs_raw)
         rollouts.obs_act[0].copy_(obs_act)
@@ -153,7 +148,7 @@ def train():
     # ipdb.set_trace()
 
     obs = envs.reset()
-    copy_obs_into_storage(obs)
+    copy_obs_into_beginning_of_storage(obs)
     for j in range(args.num_updates):
         # if j % args.clustering_period == 0 and j != 0:
         #     rewarder_fit_start = time.time()
@@ -254,5 +249,5 @@ def train():
             visualize_time += time.time() - visualize_start
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     train()
