@@ -2,7 +2,7 @@ import sys
 sys.path.append(".")
 from utils.map import Map
 from utils.misc import make_html, load_model
-from rewarder import Rewarder, SupervisedRewarder
+from env_interface import RL2EnvInterface, ContextualEnvInterface
 import os
 import torch
 import imageio
@@ -17,8 +17,8 @@ from multiworld.envs.mujoco.classic_mujoco.half_cheetah import HalfCheetahEnv
 class Looker:
     def __init__(self, log_dir, sub_dir='vis'):
         self.args = Map(json.load(open(os.path.join(log_dir, 'params.json'), 'r')))
-        self.tasks = self._get_assess_tasks()
-        self.envs = SupervisedRewarder(self.args, mode='val')
+        self.envs = RL2EnvInterface(self.args, mode='val')
+        self.tasks = self.envs.rewarder.get_assess_tasks()
         self.sub_dir = sub_dir
         os.makedirs(os.path.join(self.args.log_dir, self.sub_dir), exist_ok=True)
         from pyvirtualdisplay import Display
@@ -26,15 +26,6 @@ class Looker:
         display.start()
         _ = self.envs.envs.get_images()
 
-    def _get_assess_tasks(self):
-        tasks = None
-        if self.args.env_name == 'HalfCheetahVel-v0':
-            if self.args.task_type == 'direction':
-                if self.args.tasks == 'two':
-                    tasks = np.array([-1, 1])
-        if tasks is None:
-            raise ValueError
-        return tasks
 
     def look(self, iteration=-1):
         # actor_critic, obs_rms = torch.load(os.path.join(self.args.log_dir, self.args.env_name + ".pt"))
@@ -56,7 +47,7 @@ class Looker:
                 masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done['trial']])
                 video.extend(self.envs.envs.get_images())
 
-            filename = 'iteration_{}-task_{}.mp4'.format(iteration, self.envs.task_current[0])
+            filename = 'iteration_{}-task_{}.mp4'.format(iteration, task)
             imageio.mimwrite(os.path.join(self.args.log_dir, self.sub_dir, filename), video)
         make_html(self.args.log_dir, sub_dir='vis', extension='.mp4')
 
@@ -73,5 +64,6 @@ class Looker:
 
 
 if __name__ == '__main__':
-    looker = Looker(log_dir='./output/debug/half-cheetah/20190106/rl2_tasks-direction-two_run4')
+    looker = Looker(log_dir='./output/debug/point2d/20190107/rl2_tasks-four_run0')
     looker.look_all()
+    # looker.look(iteration=100)
