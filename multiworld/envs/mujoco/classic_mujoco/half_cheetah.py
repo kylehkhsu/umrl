@@ -44,9 +44,12 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
 
     def step(self, action):
         action = action * self.action_scale
+        x_before = self.sim.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
+        x_after = self.sim.data.qpos[0]
         ob = self._get_obs()
         info = self._get_info()
+        info['velocity'] = (x_after - x_before)/self.dt
         reward = self.compute_reward(action, ob)
         done = False
         return ob, reward, done, info
