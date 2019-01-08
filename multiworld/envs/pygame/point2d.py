@@ -226,7 +226,8 @@ class Point2DEnv(MultitaskEnv, Serializable):
 
     """Functions for ImageEnv wrapper"""
 
-    def get_image(self, width=None, height=None):
+    def render(self, mode='human', **kwargs):
+        width, height = 256, 256
         """Returns a black and white image"""
         if width is not None:
             if width != height:
@@ -240,14 +241,15 @@ class Point2DEnv(MultitaskEnv, Serializable):
                     render_onscreen=self.render_onscreen,
                 )
                 self.render_size = width
-        self.render()
+        self._render()
         img = self.drawer.get_image()
-        if self.images_are_rgb:
-            return img.transpose().flatten()
-        else:
-            r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
-            img = (-r + b).transpose().flatten()
-            return img
+        return np.rot90(img, k=1, axes=(0, 1))
+        # if self.images_are_rgb:
+        #     return img.transpose().flatten()
+        # else:
+        #     r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+        #     img = (-r + b).transpose().flatten()
+        #     return img
 
     def set_to_goal(self, goal_dict):
         goal = goal_dict["state_desired_goal"]
@@ -263,7 +265,8 @@ class Point2DEnv(MultitaskEnv, Serializable):
         self._position = position
         self._target_position = goal
 
-    def render(self, close=False):
+    def _render(self, close=False):
+
         if close:
             self.drawer = None
             return
