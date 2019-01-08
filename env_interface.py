@@ -6,7 +6,7 @@ import ipdb
 import time
 from a2c_ppo_acktr.envs import make_vec_envs
 from abc import ABC, abstractmethod
-from rewarder import SupervisedRewarder
+from rewarder import SupervisedRewarder, UnsupervisedRewarder
 
 
 class MultiTaskEnvInterface(ABC):
@@ -44,8 +44,10 @@ class MultiTaskEnvInterface(ABC):
         self.step_counter = [0 for i in range(args.num_processes)]
         self.args = args
 
-        if self.args.rewarder == 'supervised':
+        if self.args.rewarder == 'supervised' or mode == 'val':
             self.rewarder = SupervisedRewarder(args)
+        elif self.args.rewarder == 'unsupervised':
+            self.rewarder = UnsupervisedRewarder(args)
         else:
             raise ValueError
 
@@ -74,11 +76,15 @@ class MultiTaskEnvInterface(ABC):
     def set_task_one(self, task, i_process):
         pass
 
+    @abstractmethod
+    def fit_rewarder(self, **kwargs):
+        pass
+
     def _calculate_reward(self, task, obs_raw, action, **kwargs):
         return self.rewarder._calculate_reward(task, obs_raw, action, **kwargs)
 
-    def _sample_task_one(self):
-        return self.rewarder._sample_task_one()
+    def _sample_task_one(self, i_process):
+        return self.rewarder._sample_task_one(i_process)
 
 
 class RL2EnvInterface(MultiTaskEnvInterface):
@@ -94,7 +100,7 @@ class RL2EnvInterface(MultiTaskEnvInterface):
     def _reset_one(self, i_process, obs_raw, **kwargs):
         self.trajectory_current[i_process] = obs_raw[i_process].unsqueeze(0)
         if kwargs['trial_done'][i_process]:
-            self.set_task_one(self._sample_task_one(), i_process)
+            self.set_task_one(self._sample_task_one(i_process), i_process)
             self.episode_counter[i_process] = 0
         self.step_counter[i_process] = 0
 
@@ -118,7 +124,7 @@ class RL2EnvInterface(MultiTaskEnvInterface):
     def step(self, action):
         env_step_start = time.time()
         obs_raw, _, done_raw, info_raw = self.envs.step(action)
-        env_step_time = time.time() - env_step_start
+        step_time_env = time.time() - env_step_start
         assert not any(done_raw), 'environments should not reset on their own'
 
         episode_done = torch.zeros(self.args.num_processes)
@@ -161,7 +167,7 @@ class RL2EnvInterface(MultiTaskEnvInterface):
         else:
             obs = obs_raw, action, reward, flag
 
-        info = dict(reward_time=reward_time, env_step_time=env_step_time)
+        info = dict(reward_time=reward_time, step_time_env=step_time_env)
         return obs, reward, done, info
 
     def _save_episode(self, i_process, save_to=None):
@@ -183,6 +189,7 @@ class RL2EnvInterface(MultiTaskEnvInterface):
 class ContextualEnvInterface(MultiTaskEnvInterface):
     def __init__(self, args, **kwargs):
         super(ContextualEnvInterface, self).__init__(args, **kwargs)
+        self.trajectories_current_update = []
         self.context = [
             np.zeros(shape=(1, self.obs_raw_shape[0]), dtype=np.float32) for i in range(args.num_processes)
         ]
@@ -191,7 +198,10 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
     def _reset_one(self, i_process, obs_raw, **kwargs):
         self.trajectory_current[i_process] = torch.zeros(size=self.obs_raw_shape).unsqueeze(0)
         self.trajectory_current[i_process][0][:obs_raw.shape[1]] = obs_raw[i_process]
-        self.set_task_one(self._sample_task_one(), i_process)
+        task = self._sample_task_one(i_process)
+        if task is None:
+            task = np.zeros(self.obs_raw_shape)
+        self.set_task_one(task, i_process)
         self.step_counter[i_process] = 0
 
     def _get_obs(self, obs_raw):
@@ -208,7 +218,7 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
     def step(self, action):
         env_step_start = time.time()
         obs_raw, _, done_raw, info_raw = self.envs.step(action)
-        env_step_time = time.time() - env_step_start
+        step_time_env = time.time() - env_step_start
         assert not any(done_raw), 'environments should not reset on their own'
 
         done = torch.zeros(self.args.num_processes)
@@ -231,12 +241,17 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
         else:
             obs = self._get_obs(obs_raw)
 
-        info = dict(reward_time=reward_time, env_step_time=env_step_time)
+        info = dict(reward_time=reward_time, step_time_env=step_time_env)
         return obs, reward, done, info
 
     def _save_episode(self, i_process, **kwargs):
+        self.trajectories_current_update.append(self.trajectory_current[i_process])
         pass
 
     def set_task_one(self, task, i_process=0):
         self.task_current[i_process] = task
         self.context[i_process] = np.expand_dims(task, axis=0)
+
+    def fit_rewarder(self):
+        self.rewarder.fit(trajectories=self.trajectories_current_update)
+        self.trajectories_current_update = []
