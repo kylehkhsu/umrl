@@ -214,6 +214,9 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
         for i_process in range(self.args.num_processes):
             self._reset_one(i_process, obs_raw)
         obs = self._get_obs(obs_raw)
+
+        self.rewarder.reset_episode()
+
         return obs
 
     def step(self, action):

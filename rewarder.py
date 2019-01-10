@@ -47,6 +47,7 @@ class UnsupervisedRewarder(Rewarder):
         self.fit_counter_to_trajectories = []
         self.fit_counter_to_component_ids = []
         self.fit_counter_to_models = []
+        self.episode_rewards = []
 
         if self.args.context == 'mean':
             self.context_shape = obs_raw_shape
@@ -100,7 +101,13 @@ class UnsupervisedRewarder(Rewarder):
         else:
             raise ValueError
 
-        return torch.from_numpy(reward)
+        reward = torch.from_numpy(reward)
+        self.episode_rewards.append(reward)
+        if self.args.cumulative_reward:
+            rewards = torch.stack(self.episode_rewards, dim=0)
+            reward = rewards.mean(dim=0)
+
+        return reward
 
     def _sample_task_one(self, i_process):
         if self.fit_counter == 0:
@@ -150,6 +157,9 @@ class UnsupervisedRewarder(Rewarder):
         self.p_z /= self.p_z.sum()
 
         self._post_fit()
+
+    def reset_episode(self):
+        self.episode_rewards = []
 
     def append_model(self):
         self.fit_counter_to_models.append(deepcopy(self.clusterer))
