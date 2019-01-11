@@ -20,14 +20,16 @@ class VAEModel(nn.Module):
         self.input_size = 2
 
         self.hidden_size = 256
-        self.latent_size = 4
+        self.latent_size = 8
 
         # encoder
         self.encode_hidden = nn.Sequential(
             nn.Linear(self.input_size, self.hidden_size),
             nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_size),
             nn.Linear(self.hidden_size, self.hidden_size),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_size),
         )
 
         self.mean_z = nn.Linear(self.hidden_size, self.latent_size)
@@ -37,8 +39,10 @@ class VAEModel(nn.Module):
         self.decode_hidden = nn.Sequential(
             nn.Linear(self.latent_size, self.hidden_size),
             nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_size),
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_size),
         )
 
         self.mean_x = nn.Linear(self.hidden_size, self.input_size)
@@ -78,6 +82,7 @@ class VAEModel(nn.Module):
 
     def forward(self, x):
         # VAE
+        x = x.reshape([-1, self.input_size])
         mean_z, logvar_z = self.encode(x)
         z = self.reparameterize(mean_z, logvar_z)
         mean_x, logvar_x = self.decode(z)
@@ -91,6 +96,8 @@ class VAEModel(nn.Module):
         # return x
 
     def _elbo(self, x, mean_z, logvar_z, mean_x, logvar_x, beta):
+        x = x.reshape([-1, self.input_size])
+
         kl_divergence = -0.5 * torch.sum(1 + logvar_z - mean_z.pow(2) - logvar_z.exp(), dim=-1)
         kl_divergence = kl_divergence.mean()
 
@@ -106,13 +113,18 @@ class VAE:
 
     def __init__(self):
         self.model = VAEModel()
-        self.optimizer = torch.optim.SGD(
+        # self.optimizer = torch.optim.SGD(
+        #     filter(lambda x: x.requires_grad, self.model.parameters()),
+        #     lr=1e-3,
+        #     momentum=0.9,
+        # )
+        self.optimizer = torch.optim.Adam(
             filter(lambda x: x.requires_grad, self.model.parameters()),
             lr=1e-3,
-            momentum=0.9,
         )
 
-        self.beta = lambda t: min(1, 1e-4 * t)
+        # self.beta = lambda t: min(1, 1e-4 * t)
+        self.beta = lambda t: 0.5
 
         self.episode_length = 100
         self.device = torch.device('cuda:0')
@@ -296,7 +308,7 @@ if __name__ == '__main__':
     args.seed = 1
     # args.log_dir = './output/deepcluster/cluster-kmeans_init-normal_layers5_h4_f2'
     # args.log_dir = './output/vae/debug_ae_mlp_lr1e-3_mo0.9_h64'
-    args.log_dir = './output/vae/debug_vae_lr1e-3_mo0.9_h256_l4_beta-linear_skills-all'
+    args.log_dir = './output/vae/debug_vae_lr1e-3_adam_h256_l8_beta-1_skills-all_bn'
 
     os.makedirs(args.log_dir, exist_ok=True)
 
