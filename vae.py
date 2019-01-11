@@ -19,20 +19,30 @@ class VAEModel(nn.Module):
 
         self.input_size = 2
 
-        self.hidden_size = 64
-        self.latent_size = 64
+        self.hidden_size = 256
+        self.latent_size = 4
 
         # encoder
-        self.fc1 = nn.Linear(self.input_size, self.hidden_size)
-        self.fc21 = nn.Linear(self.hidden_size, self.latent_size)
-        self.fc22 = nn.Linear(self.hidden_size, self.latent_size)
+        self.encode_hidden = nn.Sequential(
+            nn.Linear(self.input_size, self.hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.ReLU()
+        )
+
+        self.mean_z = nn.Linear(self.hidden_size, self.latent_size)
+        self.logvar_z = nn.Linear(self.hidden_size, self.latent_size)
 
         # decoder
-        self.fc3 = nn.Linear(self.latent_size, self.hidden_size)
-        self.fc41 = nn.Linear(self.hidden_size, self.input_size)
-        self.fc42 = nn.Linear(self.hidden_size, self.input_size)
+        self.decode_hidden = nn.Sequential(
+            nn.Linear(self.latent_size, self.hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.ReLU(),
+        )
 
-        self.relu = nn.ReLU()
+        self.mean_x = nn.Linear(self.hidden_size, self.input_size)
+        self.logvar_x = nn.Linear(self.hidden_size, self.input_size)
 
         self.init_model()
 
@@ -54,8 +64,8 @@ class VAEModel(nn.Module):
         return self
 
     def encode(self, x):
-        h = self.relu(self.fc1(x))
-        return self.fc21(h), self.fc22(h)
+        h = self.encode_hidden(x)
+        return self.mean_z(h), self.logvar_z(h)
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -63,34 +73,33 @@ class VAEModel(nn.Module):
         return eps.mul_(std).add_(mu)
 
     def decode(self, z):
-        h = self.relu(self.fc3(z))
-        return self.fc41(h), self.fc42(h)
+        h = self.decode_hidden(z)
+        return self.mean_x(h), self.logvar_x(h)
 
-    def forward(self, input):
-        # mu_z, logvar_z = self.encode(x)
-        # z = self.reparameterize(mu_z, logvar_z)
-        # mu_x, logvar_x = self.decode(z)
-        # return mu_z, logvar_z, mu_x, logvar_x
-        # z = self.relu(self.fc1(x))
+    def forward(self, x):
+        # VAE
+        mean_z, logvar_z = self.encode(x)
+        z = self.reparameterize(mean_z, logvar_z)
+        mean_x, logvar_x = self.decode(z)
+        return mean_z, logvar_z, mean_x, logvar_x
+
+        # AE MLP
+        # z = self.relu(self.fc1(input))
         # z = self.relu(self.fc21(z))
         # x = self.relu(self.fc3(z))
         # x = self.fc41(x)
-        z = self.relu(self.fc1(input))
-        z = self.relu(self.fc21(z))
-        x = self.relu(self.fc3(z))
-        x = self.fc41(x)
-        return x
+        # return x
 
-    def _elbo(self, x, mu_z, logvar_z, mu_x, logvar_x):
-        kl_divergence = -0.5 * torch.sum(1 + logvar_z - mu_z.pow(2) - logvar_z.exp(), dim=-1)
+    def _elbo(self, x, mean_z, logvar_z, mean_x, logvar_x, beta):
+        kl_divergence = -0.5 * torch.sum(1 + logvar_z - mean_z.pow(2) - logvar_z.exp(), dim=-1)
         kl_divergence = kl_divergence.mean()
 
         d = self.input_size
         var = logvar_x.exp()
-        likelihood = -0.5 * torch.sum(logvar_x, dim=-1) - 0.5 * torch.sum(torch.pow((x - mu_x), 2) / var, dim=-1)
+        likelihood = -0.5 * torch.sum(logvar_x, dim=-1) - 0.5 * torch.sum(torch.pow((x - mean_x), 2) / var, dim=-1)
         likelihood = - 0.5 * d * torch.log(torch.Tensor([2*math.pi])).to(self.device) + likelihood
         likelihood = likelihood.mean()
-        return likelihood + kl_divergence
+        return likelihood - beta * kl_divergence
 
 
 class VAE:
@@ -102,6 +111,8 @@ class VAE:
             lr=1e-3,
             momentum=0.9,
         )
+
+        self.beta = lambda t: min(1, 1e-4 * t)
 
         self.episode_length = 100
         self.device = torch.device('cuda:0')
@@ -122,14 +133,14 @@ class VAE:
         return self._train_test_split(trajectories)
 
     def _train_test_split(self, trajectories):
-        num_skills = 20
         num_trajectories_per_skill = 40
+        num_skills = trajectories.shape[0] // num_trajectories_per_skill
 
-        indices_train = np.arange(0, 16)
-        indices_test = np.arange(16, 20)
+        indices_train = np.arange(0, 30)
+        indices_test = np.arange(30, 40)
 
         indices_train, indices_test = map(
-            lambda x: np.concatenate([x + i * num_skills for i in range(num_trajectories_per_skill)]),
+            lambda x: np.concatenate([x + i * num_trajectories_per_skill for i in range(num_skills)]),
             [indices_train, indices_test])
 
         trajectories_train, trajectories_test = trajectories[indices_train], trajectories[indices_test]
@@ -145,36 +156,40 @@ class VAE:
 
         self.model.to(self.device)
 
-        t = tqdm(range(10000))
+        t = tqdm(range(20000))
         for i_epoch in t:
-            loss_train = self._train(loader_train)
+            loss_train = self._train(loader_train, i_epoch)
 
             t.set_description('train loss: {}'.format(loss_train.avg))
 
-            if (i_epoch + 1) % 100 == 0:
+            if (i_epoch + 1) % 200 == 0:
                 loss_test = self._eval(loader_test, i_epoch)
                 # print('epoch: {}\tloss: {}'.format(i_epoch, losses.avg))
                 t.write('epoch: {}\ttrain loss: {}\ttest_loss: {}'.format(i_epoch, loss_train.avg, loss_test))
 
-    def _train(self, loader):
+    def _train(self, loader, i_epoch):
         self.model.train()
 
         losses = AverageMeter()
         for i, (x,) in enumerate(loader):
-            self.optimizer.zero_grad()
-            # mu_z, logvar_z, mu_x, logvar_x = self.model(x)
-            # logvar_z, logvar_x = torch.zeros_like(logvar_z), torch.zeros_like(logvar_x)
-            # loss = -self.model._elbo(x, mu_z, logvar_z, mu_x, logvar_x)
             x = x.to(self.device)
-            x_recon = self.model(x)
-            loss = self.loss_function(x_recon, x)
+            self.optimizer.zero_grad()
+
+            # VAE
+            mean_z, logvar_z, mean_x, logvar_x = self.model(x)
+            loss = -self.model._elbo(x, mean_z, logvar_z, mean_x, logvar_x, self.beta(i_epoch))
+
+            # AE
+            # x_recon = self.model(x)
+            # loss = self.loss_function(x_recon, x)
+
             losses.update(loss.item(), x.shape[0])
             loss.backward()
             self.optimizer.step()
 
         return losses
 
-    def _eval(self, loader, iteration):
+    def _eval(self, loader, i_epoch):
 
         self.model.eval()
         loss_function = nn.MSELoss()
@@ -187,14 +202,20 @@ class VAE:
             for i, (x,) in enumerate(loader):
                 print(i)
                 x = x.to(self.device)
-                # mu_z, logvar_z, mu_x, logvar_x = self.model(x)
-                # logvar_z, logvar_x = torch.zeros_like(logvar_z), torch.zeros_like(logvar_x)
-                # loss = -self.model._elbo(x, mu_z, logvar_z, mu_x, logvar_x)
-                x_hat = self.model(x)
-                loss = loss_function(x_hat, x)
-                losses.update(loss.item(), x.shape[0])
-                x_recon.append(x_hat)
+
+                # VAE
+                mean_z, logvar_z, mean_x, logvar_x = self.model(x)
+                loss = -self.model._elbo(x, mean_z, logvar_z, mean_x, logvar_x, self.beta(i_epoch))
+                x_recon.append(mean_x)
+
+                # AE
+                # x_hat = self.model(x)
+                # loss = loss_function(x_hat, x)
+                # x_recon.append(x_hat)
+
                 x_orig.append(x)
+
+                losses.update(loss.item(), x.shape[0])
 
         x_recon = torch.cat(x_recon, dim=0)
         x_orig = torch.cat(x_orig, dim=0)
@@ -218,25 +239,49 @@ class VAE:
                 x_plot = x_plot.cpu().numpy().reshape([-1, 2])
                 ax.scatter(x_plot[:, 0], x_plot[:, 1], s=1 ** 2)
 
-            plt.savefig(os.path.join(args.log_dir, 'x_test_{}.png'.format(iteration)))
+            plt.savefig(os.path.join(args.log_dir, 'x_test_{}.png'.format(i_epoch)))
             plt.close('all')
 
         plot(x_orig, x_recon)
         return losses.avg
 
 
-def validate_vae(args):
+def visualize(trajectories):
+    num_skills = len(trajectories) // 40
+
     def setup_axes(ax):
-        limit = 10 + 0.5
+        limit = 1
         ax.set_xlim(left=-limit, right=limit)
         ax.set_ylim(bottom=-limit, top=limit)
 
+    fig, axes = plt.subplots(nrows=4, ncols=5, sharex='all', sharey='all', figsize=[10, 8])
+    axes = axes.reshape([-1])
+    for i in range(num_skills):
+        ax = axes[i]
+        setup_axes(ax)
+
+        states = trajectories[i*40:(i+1)*40].reshape([-1, 2])
+        ax.scatter(states[:, 0], states[:, 1], s=1)
+        ax.set_title('skill {}'.format(i))
+    plt.savefig('./output/vae/skills_kept.png')
+    plt.close('all)')
+
+
+
+def validate_vae(args):
     vae = VAE()
 
     trajectories = np.load('./mixture/data_itr20.pkl')
     trajectories = trajectories / 10
+    # i_skill_keep = np.array([1, 3, 9, 10, 11, 13])
+    #
+    # trajectories = trajectories.reshape([20, 40, 100, 2])
+    # trajectories = trajectories[i_skill_keep]
+    # trajectories = trajectories.reshape([-1, 100, 2])
 
     vae.fit(trajectories)
+    # visualize(trajectories)
+
 
 if __name__ == '__main__':
     # filename = '/home/kylehsu/experiments/umrl/output/point2d/20190108/context-all_mog_K50_T50_lambda0.5_ent0.1_N1000/history.pkl'
@@ -250,7 +295,9 @@ if __name__ == '__main__':
     args.episode_length = 100
     args.seed = 1
     # args.log_dir = './output/deepcluster/cluster-kmeans_init-normal_layers5_h4_f2'
-    args.log_dir = './output/vae/debug_ae_mlp_lr1e-mo0.9_h64'
+    # args.log_dir = './output/vae/debug_ae_mlp_lr1e-3_mo0.9_h64'
+    args.log_dir = './output/vae/debug_vae_lr1e-3_mo0.9_h256_l4_beta-linear_skills-all'
+
     os.makedirs(args.log_dir, exist_ok=True)
 
     # set seeds
