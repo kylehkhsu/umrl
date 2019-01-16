@@ -1,37 +1,43 @@
-#FROM ubuntu:16.04
-#
-#RUN apt-get update --fix-missing && \
-#    apt-get -y install wget bzip2 ca-certificates curl git sudo git python3 tar
-#
-#RUN useradd --create-home --shell /bin/bash docker && echo "docker:docker" | chpasswd && adduser docker sudo
-#USER docker
-#WORKDIR /home/docker/experiments
-#
-#RUN wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O $HOME/miniconda.sh
-#RUN chmod 0755 $HOME/miniconda.sh
-#RUN $HOME/miniconda.sh -b -p $HOME/conda
-#ENV PATH="/home/docker/conda/bin:$PATH"
-#RUN rm $HOME/miniconda.sh
-#RUN conda update conda
-#
-#RUN conda config --append channels conda-forge && \
-#    conda config --append channels pytorch
-#COPY . $HOME
-#RUN conda create --name umrl --file requirements_conda.txt
+FROM ubuntu:16.04
 
-#FROM kylehsu/umrl:0.1
-#
-#USER root
-#RUN apt-get -y install cmake libopenmpi-dev python3-dev zlib1g-dev
-#USER docker
-#
-#ENV PATH $HOME/conda/envs/testenv/bin:$PATH
-#COPY . $HOME
-#RUN ["/bin/bash", "-c", "source activate umrl && pip install --upgrade pip && pip install -r requirements_pip.txt"]
+RUN apt-get update --fix-missing && \
+    apt-get -y install wget bzip2 ca-certificates curl git sudo git python3 tar cmake libopenmpi-dev python3-dev zlib1g-dev
 
-#RUN ["/bin/bash", "-c", "mkdir ~/install && cd ~/install && git clone https://github.com/openai/baselines.git"]
-#RUN ["/bin/bash", "-c", "source activate umrl && pip install -e ~/install/baselines"]
+RUN apt-get install -y python-pyglet python3-opengl zlib1g-dev libjpeg-dev patchelf \
+        cmake swig libboost-all-dev libsdl2-dev libosmesa6-dev xvfb ffmpeg
 
-FROM kylehsu/umrl:0.2
-COPY ./ /home/docker/experiments/umrl
-ENTRYPOINT ["/bin/bash", "-c", "cd umrl"]
+SHELL ["/bin/bash", "-c"]
+
+# user
+RUN useradd --create-home --home-dir /home/docker --shell /bin/bash docker
+USER docker
+ENV HOME /home/docker
+
+# install conda
+RUN wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O $HOME/miniconda.sh
+RUN chmod 0755 $HOME/miniconda.sh
+RUN $HOME/miniconda.sh -b -p $HOME/conda
+ENV PATH="/home/docker/conda/bin:$PATH"
+RUN rm $HOME/miniconda.sh
+RUN conda update conda
+
+# install umrl w/o mujoco, gym, baselines
+COPY ./docker/environment.yml $HOME
+RUN conda env create -f $HOME/environment.yml
+RUN rm $HOME/environment.yml
+
+# install mujoco
+COPY ./docker/.mujoco/ $HOME/.mujoco
+ENV LD_LIBRARY_PATH $HOME/.mujoco/mjpro150/bin:${LD_LIBRARY_PATH}
+RUN source activate umrl && pip install mujoco-py
+
+# install gym
+RUN source activate umrl && pip install gym
+
+# install baselines
+RUN mkdir $HOME/install && cd $HOME/install && git clone https://github.com/openai/baselines.git
+RUN source activate umrl && pip install -e $HOME/install/baselines
+
+# delay loading code until last
+WORKDIR $HOME/experiments/umrl
+COPY . .

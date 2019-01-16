@@ -20,20 +20,28 @@ def load_model(log_dir, iteration, sub_dir='ckpt'):
 
 
 def guard_against_underflow(x):
-    assert x.dtype == np.float64
-    if np.all(x <= 0):  # log-space
-        x[x < -600] = -600
-    elif np.all(x >= 0):    #
-        x[x < 1e-300] = 1e-300
+    if isinstance(x, np.ndarray):
+
+        assert x.dtype == np.float64
+        if np.all(x <= 0):  # log-space
+            x[x < -600] = -600
+        elif np.all(x >= 0):    #
+            x[x < 1e-300] = 1e-300
+        else:
+            raise NotImplementedError
+
+    elif isinstance(x, torch.Tensor):
+        x[x == -float('inf')] = -300
     else:
         raise NotImplementedError
+
     return x
 
 
 def calculate_state_entropy(args, trajectories):
     if 'Point2D' in args.env_name:
         bins = 100
-        bounds = (np.array([-10, 0]), np.array([-10, 10]))
+        bounds = (np.array([-10, 10]), np.array([-10, 10]))
     else:
         raise ValueError
 
