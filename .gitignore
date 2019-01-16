@@ -118,3 +118,4 @@ dmypy.json
 output
 .idea/
 pyhtmlwriter/
+docker/.mujoco/

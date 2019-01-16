@@ -10,6 +10,7 @@ import os
 import math
 import ipdb
 import re
+import glob
 from itertools import chain
 
 from sklearn.exceptions import NotFittedError
@@ -23,11 +24,12 @@ from pyhtmlwriter.Table import Table
 from pyhtmlwriter.TableWriter import TableWriter
 
 
-def setup_axes(ax):
-    limit = 10 + 0.5
+def setup_axes(ax, limit=10, walls=True):
     ax.set_xlim(left=-limit, right=limit)
     ax.set_ylim(bottom=-limit, top=limit)
-    plot_background(ax)
+
+    if walls:
+        plot_background(ax)
 
 
 def plot_background(ax):
@@ -64,7 +66,7 @@ def add_time(trajectories):
 def plot_per_fitting_iteration(history):
     trajectories_all, component_ids_all, models = history['trajectories'], history['component_ids'], history['models']
 
-    num_plots = len(models)
+    num_plots = len(trajectories_all)
     num_cols = 5
     num_rows = math.ceil(num_plots / num_cols)
 
@@ -72,10 +74,10 @@ def plot_per_fitting_iteration(history):
                              figsize=[10, 2 * num_rows])
     axes = axes.reshape([-1])
 
-    for i_fit in range(len(models)):
+    for i_fit in range(len(trajectories_all)):
         ax = axes[i_fit]
         setup_axes(ax)
-        if i_fit > 0:
+        if i_fit > 0 and len(models) > 0:
             plot_components(ax, models[i_fit-1])
 
         trajectories = torch.stack(trajectories_all[i_fit]).numpy()
@@ -83,19 +85,20 @@ def plot_per_fitting_iteration(history):
         states = trajectories.reshape([-1, trajectories.shape[-1]])
         ax.scatter(states[:, 0], states[:, 1], s=0.25**2, c=states[:, 2], marker='o')
 
-        # Evaluate an existing colormap from 0.5 (midpoint) to 1 (upper end)
-        cmap = plt.get_cmap('Greys')
-        colors = cmap(np.linspace(0.5, 1, cmap.N // 2))
+        if len(models) > 0:
+            # Evaluate an existing colormap from 0.5 (midpoint) to 1 (upper end)
+            cmap = plt.get_cmap('Greys')
+            colors = cmap(np.linspace(0.5, 1, cmap.N // 2))
 
-        # Create a new colormap from those colors
-        cmap_upper = LinearSegmentedColormap.from_list('Upper Half', colors)
+            # Create a new colormap from those colors
+            cmap_upper = LinearSegmentedColormap.from_list('Upper Half', colors)
 
-        component_ids = np.array(component_ids_all[i_fit])
-        component_ids_unique = np.unique(component_ids)
-        for indices in [np.argwhere(component_ids == component_id) for component_id in component_ids_unique]:
-            mean_trajectory = np.mean(trajectories[indices, :, :], axis=0, dtype=np.float64).squeeze(axis=0)
-            ax.scatter(mean_trajectory[:, 0], mean_trajectory[:, 1], c=mean_trajectory[:, 2],
-                       s=1**2, cmap=cmap_upper, marker='o')
+            component_ids = np.array(component_ids_all[i_fit])
+            component_ids_unique = np.unique(component_ids)
+            for indices in [np.argwhere(component_ids == component_id) for component_id in component_ids_unique]:
+                mean_trajectory = np.mean(trajectories[indices, :, :], axis=0, dtype=np.float64).squeeze(axis=0)
+                ax.scatter(mean_trajectory[:, 0], mean_trajectory[:, 1], c=mean_trajectory[:, 2],
+                           s=1**2, cmap=cmap_upper, marker='o')
 
         ax.set_title('fitting iteration {}'.format(i_fit))
 
@@ -104,7 +107,7 @@ def plot_previous_states_per_fitting_iteration(history):
     trajectories_all, models = history['trajectories'], history['models']
     max_trajectories = 10000
 
-    num_plots = len(models)
+    num_plots = len(trajectories_all)
     num_cols = 5
     num_rows = math.ceil(num_plots / num_cols)
 
@@ -112,16 +115,19 @@ def plot_previous_states_per_fitting_iteration(history):
                              figsize=[10, 2 * num_rows])
     axes = axes.reshape([-1])
 
-    for i_fit in range(len(models)):
+    for i_fit in range(len(trajectories_all)):
         ax = axes[i_fit]
         setup_axes(ax)
-        plot_components(ax, models[i_fit])
+
+        if len(models) > 0:
+            plot_components(ax, models[i_fit])
 
         trajectories = list(chain(*trajectories_all[:i_fit + 1]))
         if len(trajectories) > max_trajectories:
             indices = np.random.choice(len(trajectories), size=max_trajectories, replace=True)
             trajectories = [trajectories[index] for index in indices]
         states = torch.cat(trajectories).numpy()
+
         ax.scatter(states[:, 0], states[:, 1], s=0.1 ** 2, c='black', marker='o')
 
         ax.set_title('fitting iteration {}'.format(i_fit))
@@ -134,7 +140,7 @@ def plot_and_save(log_dir, sub_dir='plt'):
     history_filename = os.path.join(log_dir, 'history.pkl')
     history = pickle.load(open(history_filename, 'rb'))
     plot_per_fitting_iteration(history)
-    plt.savefig(os.path.join(save_dir, 'model_and_trajectories'))
+    plt.savefig(os.path.join(save_dir, 'trajectories_per_iteration'))
 
     plot_previous_states_per_fitting_iteration(history)
     plt.savefig(os.path.join(save_dir, 'all_states'))
@@ -156,6 +162,8 @@ def make_html(root_dir, sub_dir='plt', extension='.png'):
             title = match[1]
             media.append((filename, title))
 
+    media.extend(get_vae_media(root_dir))
+
     table = Table()
     for (filename, title) in media:
         row = TableRow()
@@ -173,12 +181,41 @@ def make_html(root_dir, sub_dir='plt', extension='.png'):
     tw.write()
 
 
+def get_vae_media(root_dir, sub_dir='plt'):
+    filenames = []
+    vae_dirs = glob.glob(os.path.join(root_dir, sub_dir, 'vae*'))
+    for vae_dir in vae_dirs:
+        vae_dir = os.path.relpath(vae_dir, os.path.join(root_dir, sub_dir))
+        files = os.listdir(os.path.join(root_dir, sub_dir, vae_dir))
+        if len(files) == 0:
+            continue
+        latest_file = max(files, key=lambda x: os.path.getctime(os.path.join(root_dir, sub_dir, vae_dir, x)))
+        filenames.append(os.path.join(vae_dir, latest_file))
+
+    media = []
+    regexp = re.compile('vae_*(\d+)/*')
+    for filename in filenames:
+        match = regexp.search(filename)
+        if match:
+            title = int(match[1])
+            media.append((filename, title))
+
+    media = sorted(media, key=lambda x: x[1])
+
+    return media
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--log-dir', default='./output/point2d/20190108/context_dp-mog_T30_K10_lambda0.8_ent0.1_gamma0.99')
+    parser.add_argument('--test', action='store_true')
     args = parser.parse_args()
-    plot_and_save(args.log_dir)
+    if args.test:
+        get_vae(args.log_dir)
+    else:
+        plot_and_save(args.log_dir)
+
 
 
 # class Args:

@@ -19,7 +19,7 @@ class MultiTaskEnvInterface(ABC):
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
 
-        device = torch.device('cuda:0' if args.cuda else 'cpu')
+        self.device = args.device
         env_id = args.env_name
 
         self.envs = make_vec_envs(env_name=env_id,
@@ -28,7 +28,7 @@ class MultiTaskEnvInterface(ABC):
                                   gamma=args.gamma,
                                   log_dir=args.log_dir,
                                   add_timestep=False,
-                                  device=device,
+                                  device=self.device,
                                   allow_early_resets=True)
 
         if args.obs == 'raw':
@@ -205,8 +205,12 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
         self.set_task_one(task, i_process)
         self.step_counter[i_process] = 0
 
-    def _get_obs(self, obs_raw):
+    def _get_context_tensor(self):
         context = torch.from_numpy(np.concatenate(self.context, axis=0).astype(dtype=np.float32))
+        return context
+
+    def _get_obs(self, obs_raw):
+        context = self._get_context_tensor()
         return torch.cat([obs_raw, context], dim=1)
 
     def reset(self):
@@ -235,7 +239,11 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
                 self._append_to_trajectory_one(i_process, obs_raw)
             done[i_process] = done_
         reward_start = time.time()
-        reward = self._calculate_reward(self.task_current, obs_raw, action, env_info=info_raw)
+        reward, reward_info = self._calculate_reward(self.task_current,
+                                                     obs_raw,
+                                                     action,
+                                                     latent=self._get_context_tensor(),
+                                                     env_info=info_raw)
         reward_time = time.time() - reward_start
         reward = reward.unsqueeze(1)
 
@@ -246,6 +254,7 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
             obs = self._get_obs(obs_raw)
 
         info = dict(reward_time=reward_time, step_time_env=step_time_env)
+        info = {**info, **reward_info}
         return obs, reward, done, info
 
     def _save_episode(self, i_process, **kwargs):

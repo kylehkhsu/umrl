@@ -123,15 +123,16 @@ args = get_args()
 #     assert args.context == 'one_hot'
 
 # objective optimization
-args.cuda = False
+args.cuda = True
 args.algo = 'ppo'
-args.entropy_coef = 0.1
+args.entropy_coef = 0.03
 args.lr = 3e-4
 args.value_loss_coef = 0.1
 args.gamma = 0.99
 args.tau = 0.95
 args.use_gae = True
 args.use_linear_lr_decay = False
+args.cold_start_policy = False
 
 # environment, reward
 args.interface = 'contextual'
@@ -141,16 +142,27 @@ args.rewarder = 'unsupervised'    # supervised or unsupervised
 args.obs = 'raw'
 
 # specific to args.rewarder == 'unsupervised'
-args.clusterer = 'mog'  # mog or dp-mog or diayn
-args.max_components = 50
-args.reward = 's|z' # s|z or z|s
-args.conditional_coef = 0
-args.rewarder_fit_period = 10
-args.subsample_num = 5000
+args.cumulative_reward = False
+args.clusterer = 'vae'  # mog or dp-mog or diayn or vae
+args.max_components = 25    # irrelevant for vae
+args.reward = 's|z'     # s|z or z|s
+args.conditional_coef = 0.2
+args.rewarder_fit_period = 50
+args.subsample_num = 2048
 args.weight_concentration_prior = 1e5   # specific to dp-mog
-args.subsample_strategy = 'random'    # skew or random
+args.subsample_strategy = 'last-random'    # skew or random or last-random
+args.subsample_last_per_fit = 300
 args.subsample_power = -0.01   # specific to skewing
-args.context = 'all'   # mean or all
+args.context = 'latent'   # mean or all or latent
+
+# specific to args.clusterer == 'vae'
+args.vae_beta = 0.5
+args.vae_lr = 5e-4
+args.vae_hidden_size = 256
+args.vae_latent_size = 8
+args.vae_plot = True
+args.vae_scale = True
+args.vae_max_fit_epoch = 1000
 
 # specific to args.rewarder == 'supervised' or supervised evaluation
 args.dense_coef = 1
@@ -160,9 +172,9 @@ args.task_type = 'goal'
 
 # steps, processes
 args.num_mini_batch = 5
-args.num_processes = 20
+args.num_processes = 5
 args.trial_length = 1
-args.episode_length = 50
+args.episode_length = 30
 args.trials_per_update = 100
 args.trials_per_process_per_update = args.trials_per_update // args.num_processes
 args.num_steps = args.episode_length * args.trial_length * args.trials_per_process_per_update
@@ -171,8 +183,8 @@ args.num_updates = 1000
 # logging, saving, visualization
 args.save_period = args.rewarder_fit_period
 args.vis_period = args.rewarder_fit_period
-args.log_dir = './output/point2d/20190108/context-all_mog_K50_T50_lambda0_ent0.1_N1000'
-# args.log_dir = './output/debug/point2d/20190108/context_dp-mog_T30_lambda0.8_context-all_ent0.01'
+args.log_dir = './output/point2d/20190115/context_vae-warm_policy-warm_lambda0.5_P50_N1000'
+# args.log_dir = './output/debug/point2d/201901114/context_mog'
 args.look = False
 args.plot = True
 
@@ -183,19 +195,32 @@ np.random.seed(args.seed)
 
 assert args.trial_length == 1
 
+args.device = 'cuda:0' if args.cuda else 'cpu'
+
+
+def initialize_policy(envs):
+    actor_critic = Policy(envs.obs_shape, envs.action_space,
+                          base_kwargs={'recurrent': args.recurrent_policy})
+    actor_critic.to(args.device)
+    agent = algo.PPO(actor_critic, args.clip_param, args.ppo_epoch, args.num_mini_batch,
+                     args.value_loss_coef, args.entropy_coef, lr=args.lr,
+                     eps=args.eps,
+                     max_grad_norm=args.max_grad_norm)
+    return actor_critic, agent
+
+
 def train():
     processes = []
-    # if os.path.isdir(args.log_dir):
-    #     ans = input('{} exists\ncontinue and overwrite? y/n: '.format(args.log_dir))
-    #     if ans == 'n':
-    #         return
+    if os.path.isdir(args.log_dir):
+        ans = input('{} exists\ncontinue and overwrite? y/n: '.format(args.log_dir))
+        if ans == 'n':
+            return
 
     logger.configure(dir=args.log_dir, format_strs=['stdout', 'log', 'csv'])
     logger.log(args)
     json.dump(vars(args), open(os.path.join(args.log_dir, 'params.json'), 'w'))
 
     torch.set_num_threads(2)
-    device = torch.device('cuda:0' if args.cuda else 'cpu')
 
     start = time.time()
     policy_update_time, policy_forward_time = 0, 0
@@ -207,23 +232,20 @@ def train():
     if args.look:
         looker = Looker(args.log_dir)
 
-    actor_critic = Policy(envs.obs_shape, envs.action_space,
-                          base_kwargs={'recurrent': args.recurrent_policy})
-    actor_critic.to(device)
-    agent = algo.PPO(actor_critic, args.clip_param, args.ppo_epoch, args.num_mini_batch,
-                     args.value_loss_coef, args.entropy_coef, lr=args.lr,
-                     eps=args.eps,
-                     max_grad_norm=args.max_grad_norm)
+    actor_critic, agent = initialize_policy(envs)
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
                         envs.obs_shape, envs.action_space,
                         actor_critic.recurrent_hidden_state_size)
-    rollouts.to(device)
+    rollouts.to(args.device)
 
     def copy_obs_into_beginning_of_storage(obs):
         rollouts.obs[0].copy_(obs)
 
     for j in range(args.num_updates):
+        if args.clusterer == 'vae':
+            envs.rewarder.clusterer.to(args.device)
+
         obs = envs.reset()  # have to reset here to use updated rewarder to sample tasks
         copy_obs_into_beginning_of_storage(obs)
 
@@ -232,6 +254,9 @@ def train():
 
         if args.algo == 'ppo' and args.use_linear_clip_decay:
             agent.clip_param = args.clip_param  * (1 - j / float(args.num_updates))
+
+        log_marginal = 0
+        lambda_log_s_given_z = 0
 
         for step in range(args.num_steps):
             # Sample actions
@@ -249,12 +274,17 @@ def train():
             step_time_total += time.time() - step_total_start
             step_time_env += info['step_time_env']
             step_time_rewarder += info['reward_time']
+            log_marginal += info['log_marginal'].sum().item()
+            lambda_log_s_given_z += info['lambda_log_s_given_z'].sum().item()
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
             rollouts.insert(obs, recurrent_hidden_states, action, action_log_prob, value, reward, masks)
 
-        assert all(done)    #
+        assert all(done)
+
+        if args.clusterer == 'vae':
+            envs.rewarder.clusterer.to(torch.device('cpu'))
 
         # policy update
         with torch.no_grad():
@@ -278,6 +308,8 @@ def train():
 
         return_avg = rollouts.rewards.sum() / args.trials_per_update
         reward_avg = return_avg / (args.trial_length * args.episode_length)
+        log_marginal_avg = log_marginal / args.trials_per_update / (args.trial_length * args.episode_length)
+        lambda_log_s_given_z_avg = lambda_log_s_given_z / args.trials_per_update / (args.trial_length * args.episode_length)
 
         # if j % args.visualize_period == 0:
         #     print('making visualization')
@@ -309,15 +341,19 @@ def train():
         # logger.logkv('discriminator_loss', rewarder.discriminator_loss)
         logger.logkv('visualize_time', visualize_time)
         logger.logkv('rewarder_fit_time', rewarder_fit_time)
+        logger.logkv('log_marginal_avg', log_marginal_avg)
+        logger.logkv('lambda_log_s_given_z_avg', lambda_log_s_given_z_avg)
         logger.dumpkvs()
+
+        if (j % args.save_period == 0 or j == args.num_updates - 1) and args.log_dir != '':
+            save_model(args, actor_critic, envs, iteration=j)
 
         if j % args.rewarder_fit_period == 0:
             rewarder_fit_start = time.time()
             envs.fit_rewarder()
             rewarder_fit_time += time.time() - rewarder_fit_start
-
-        if (j % args.save_period == 0 or j == args.num_updates - 1) and args.log_dir != '':
-            save_model(args, actor_critic, envs, iteration=j)
+            if args.cold_start_policy:
+                actor_critic, agent = initialize_policy(envs)
 
         if (j % args.vis_period == 0 or j == args.num_updates - 1) and args.log_dir != '':
             visualize_start = time.time()
@@ -326,7 +362,6 @@ def train():
             if args.plot:
                 p = Popen('python visualize.py --log-dir {}'.format(args.log_dir), shell=True)
                 processes.append(p)
-                # plot_and_save(args.log_dir)
             visualize_time += time.time() - visualize_start
 
             # if j == args.num_updates - 1:

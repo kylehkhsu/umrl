@@ -29,9 +29,9 @@ class LinearReLUBatchNorm(nn.Module):
 
 
 class VAEModel(nn.Module):
-    def __init__(self, args, input_size=2):
+    def __init__(self, args, input_size):
         super(VAEModel, self).__init__()
-        self.device = torch.device('cuda:0')
+        self.device = args.device
 
         self.input_size = input_size
 
@@ -108,10 +108,13 @@ class VAEModel(nn.Module):
         mean_x, logvar_x = self.mean_x(h), self.logvar_x(h)
         mean_x = mean_x.reshape(*orig_shape, mean_x.shape[-1])
         logvar_x = logvar_x.reshape(*orig_shape, logvar_x.shape[-1])
+
+        logvar_x = logvar_x.clamp(max=5.0)  # can get to inf
+        logvar_x = logvar_x.exp().add(0.01).log()     # add some variance to regularize
+
         return mean_x, logvar_x
 
     def _get_time(self):
-        # t = torch.eye(self.episode_length).unsqueeze(0).repeat([batch_size, 1, 1])
         return torch.eye(self.episode_length).to(self.device)
 
     def _aggregate_z_param(self, z_param):
@@ -145,7 +148,7 @@ class VAEModel(nn.Module):
     def _log_likelihood(self, x, mean_x, logvar_x):
         assert x.shape == mean_x.shape == logvar_x.shape
         var = logvar_x.exp()
-        log_likelihood = -0.5 * torch.sum(logvar_x, dim=-1) - 0.5 * torch.sum(torch.pow((x - mean_x), 2) / var, dim=-1)
+        log_likelihood = -0.5 * torch.sum(logvar_x, dim=-1) - 0.5 * (x - mean_x).pow(2).div(var).sum(dim=-1)
         log_likelihood = -0.5 * self.input_size * self.log_2_pi + log_likelihood
         return log_likelihood
 
@@ -154,16 +157,16 @@ class VAEModel(nn.Module):
         return kl_divergence
 
     def _elbo(self, x, mean_z, logvar_z, mean_x, logvar_x, beta):
-        return self._log_likelihood(x, mean_x, logvar_x) - \
-            beta * self._kl_divergence(mean_z, logvar_z)
+        elbo = self._log_likelihood(x, mean_x, logvar_x) - beta * self._kl_divergence(mean_z, logvar_z)
+        return elbo
 
 
 class VAE:
 
-    def __init__(self, args):
+    def __init__(self, args, input_size):
         self.args = args
         self.episode_length = args.episode_length
-        self.model = VAEModel(args)
+        self.model = VAEModel(args, input_size)
         # self.optimizer = torch.optim.SGD(
         #     filter(lambda x: x.requires_grad, self.model.parameters()),
         #     lr=1e-3,
@@ -171,19 +174,31 @@ class VAE:
         # )
         self.optimizer = torch.optim.Adam(
             filter(lambda x: x.requires_grad, self.model.parameters()),
-            lr=args.vae_lr,
+            lr=self.args.vae_lr,
         )
+
+        self.scale = self.args.vae_scale
 
         # self.beta = lambda t: min(1, args.vae_beta + 1e-3 * t)
         self.beta = lambda t: args.vae_beta
         self.device = args.device
-        self.filename = os.path.join(args.log_dir, 'vae.pt')
-
+        self.model.to(self.device)
+        
+    def load(self, iteration):
+        self._set_logging(iteration)
         if os.path.isfile(self.filename):
             self.model.load_state_dict(torch.load(self.filename))
-            self.model.to(self.device)
             self.model.eval()
             print('loaded {}'.format(self.filename))
+            self.model.to(self.device)
+        else:
+            raise ValueError
+
+    def _set_logging(self, iteration):
+        self.filename = os.path.join(self.args.log_dir, 'ckpt', 'vae_{}.pt'.format(iteration))
+        self.plot_dir = os.path.join(self.args.log_dir, 'plt', 'vae_{}'.format(iteration))
+        os.makedirs(os.path.join(self.args.log_dir, 'ckpt'), exist_ok=True)
+        os.makedirs(self.plot_dir, exist_ok=True)
 
     def preprocess_trajectories(self, trajectories):
         if isinstance(trajectories, list) and isinstance(trajectories[0], list):
@@ -195,6 +210,8 @@ class VAE:
             pass
         else:
             raise ValueError
+
+        trajectories = self.scale_data(trajectories)
 
         assert self.episode_length == trajectories.shape[1]
 
@@ -220,18 +237,22 @@ class VAE:
 
         return torch.utils.data.TensorDataset(trajectories_train), torch.utils.data.TensorDataset(trajectories_test)
 
-    def fit(self, trajectories):
-        early_stopping = EarlyStopping(mode='min', min_delta=0.002 if self.args.scale else 0.02, patience=500)
+    def fit(self, trajectories, iteration):
+        self._set_logging(iteration)
+        self.optimizer = torch.optim.Adam(
+            filter(lambda x: x.requires_grad, self.model.parameters()),
+            lr=self.args.vae_lr,
+        )
+        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.scale else 0.02, patience=300)
 
         dataset_train, dataset_test = self.preprocess_trajectories(trajectories)
-        # trajectories = trajectories.reshape([-1, 2])
 
         loader_train = torch.utils.data.DataLoader(dataset_train, shuffle=True, batch_size=1024, num_workers=2)
         loader_test = torch.utils.data.DataLoader(dataset_test, shuffle=False, batch_size=1024, num_workers=2)
 
-        self.model.to(self.device)
+        num_max_epoch = self.args.vae_max_fit_epoch
 
-        t = tqdm(range(3000))
+        t = tqdm(range(num_max_epoch))
         for i_epoch in t:
             loss_train = self._train(loader_train, i_epoch)
 
@@ -242,13 +263,13 @@ class VAE:
                 # print('epoch: {}\tloss: {}'.format(i_epoch, losses.avg))
                 t.write('epoch: {}\ttrain loss: {}\ttest_loss: {}'.format(i_epoch, loss_train, loss_test))
 
-            if early_stopping.step(loss_train):
-                break
+            if i_epoch > 300:
+                if early_stopping.step(loss_train):     # doesn't start tracking until epoch 300
+                    t.close()
+                    break
 
         torch.save(self.model.state_dict(), self.filename)
         print('wrote vae model to {}'.format(self.filename))
-
-        self.model.to(torch.device('cpu'))
 
     def _train(self, loader, i_epoch):
         self.model.train()
@@ -262,6 +283,9 @@ class VAE:
             mean_z, logvar_z, mean_x, logvar_x = self.model(x)
             elbo = self.model._elbo(x, mean_z, logvar_z, mean_x, logvar_x, self.beta(i_epoch))
             loss = -elbo.mean()
+
+            if (loss != loss).any() or (loss == float('inf')).any() or (loss == -float('inf')).any():
+                raise RuntimeError
 
             losses.update(loss.item(), x.shape[0])
             loss.backward()
@@ -294,18 +318,22 @@ class VAE:
         x_recon = torch.cat(x_recon, dim=0)
         x_orig = torch.cat(x_orig, dim=0)
 
+        z, x_sample, x_sample_mean = self.sample(num_samples=128)
+
         self.model.train()
 
-        def plot_reconstructions(x_orig, x_recon):
-
-            fig, axes = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all',
-                                     figsize=[10, 5])
+        def plot():
+            ig, axes = plt.subplots(nrows=1, ncols=4, sharex='all', sharey='all',
+                                    figsize=[20, 5])
             axes = axes.reshape([-1])
 
-            for i, (x_plot, title) in enumerate(zip([x_orig, x_recon], ['raw', 'reconstruction mean'])):
+            for i, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction mean', 'sample mean'])):
                 ax = axes[i]
-                setup_axes(ax, limit=1 if self.args.scale else 10, walls=False if self.args.scale else True)
+                setup_axes(ax, limit=10, walls=True)
                 ax.set_title(title)
+
+                if self.scale:
+                    x_plot = self.unscale_data(x_plot)
 
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
 
@@ -315,32 +343,11 @@ class VAE:
                 sc = ax.scatter(x_plot[:, 0], x_plot[:, 1], c=x_plot[:, 2], s=1 ** 2)
                 plt.colorbar(sc, ax=ax)
 
-            plt.savefig(os.path.join(args.log_dir, 'reconstructions_{}.png'.format(i_epoch)))
+            plt.savefig(os.path.join(self.plot_dir, 'epoch_{}.png'.format(i_epoch)))
             plt.close('all')
 
-        def plot_samples():
-            z, x, x_mean = self.sample(num_samples=100)
-
-            fig, axes = plt.subplots(nrows=1, ncols=2, figsize=[10, 5])
-            axes = axes.reshape([-1])
-
-            for i, (x_plot, title) in enumerate(zip([x, x_mean], ['sample', 'mean'])):
-                ax = axes[i]
-                setup_axes(ax, limit=1 if self.args.scale else 10, walls=False if self.args.scale else True)
-                ax.set_title(title)
-
-                x_plot = add_time(x_plot.cpu().numpy())
-
-                x_plot = x_plot.reshape([-1, x_plot.shape[-1]])
-                sc = ax.scatter(x_plot[:, 0], x_plot[:, 1], c=x_plot[:, 2], s=1 ** 2)
-
-                plt.colorbar(sc, ax=ax)
-
-            plt.savefig(os.path.join(args.log_dir, 'generations_{}.png'.format(i_epoch)))
-            plt.close('all')
-
-        plot_reconstructions(x_orig, x_recon)
-        plot_samples()
+        if self.args.vae_plot:
+            plot()
 
         return losses.avg
 
@@ -350,11 +357,14 @@ class VAE:
         assert s.shape[1] == self.model.input_size
         assert z.shape[1] == self.model.latent_size
 
+        if self.scale:
+            s = self.scale_data(s)
+
         self.model.eval()
 
         with torch.no_grad():
-            x = s.reshape(s.shape[0], 1, s.shape[1]).expand([-1, self.episode_length, -1])
-            z = z.reshape(z.shape[0], 1, z.shape[1]).expand([-1, self.episode_length, -1])
+            x = s.to(self.device).reshape(s.shape[0], 1, s.shape[1]).expand([-1, self.episode_length, -1])
+            z = z.to(self.device).reshape(z.shape[0], 1, z.shape[1]).expand([-1, self.episode_length, -1])
 
             z_and_t = self.model._get_reconstruction_latent(z)
             mean_x, logvar_x = self.model.decode(z_and_t)
@@ -363,7 +373,7 @@ class VAE:
             assert log_likelihood.dim() == 2
             assert log_likelihood.shape[1] == self.episode_length
             log_likelihood = log_likelihood.exp().mean(dim=1).log()     # marginalize out t
-        return log_likelihood
+        return log_likelihood.cpu()
 
     def log_marginal(self, s):
         assert s.shape[1] == self.model.input_size
@@ -371,10 +381,13 @@ class VAE:
         self.model.eval()
         # (i_process, i_repetition, i_t, i_feature)
         num_processes = s.shape[0]
-        num_z_samples = 256     # samples of z per x; for the expectation under q(z|x)
+        num_z_samples = 128     # samples of z per x; for the expectation under q(z|x)
+
+        if self.scale:
+            s = self.scale_data(s)
 
         with torch.no_grad():
-            x = s.reshape(s.shape[0], 1, 1, s.shape[1]).expand([-1, num_z_samples, self.episode_length, -1])
+            x = s.to(self.device).reshape(s.shape[0], 1, 1, s.shape[1]).expand([-1, num_z_samples, self.episode_length, -1])
             mean_z, logvar_z = self.model.encode(x)
             z = self.model.reparameterize(mean_z, logvar_z)
             z = z.expand([-1, -1, self.episode_length, -1])
@@ -392,9 +405,7 @@ class VAE:
             assert elbo.shape[1] == num_z_samples
             elbo = elbo.mean(dim=1)
 
-            ipdb.set_trace()
-
-        return elbo
+        return elbo.cpu()
 
     def sample(self, num_samples):
         self.model.eval()
@@ -410,21 +421,14 @@ class VAE:
         mean_x = mean_x.reshape([num_samples, self.episode_length, self.model.input_size])
         return z, x, mean_x
 
+    def to(self, device):
+        self.model.to(device)
 
-# def visualize(trajectories):
-#     num_skills = len(trajectories) // 40
-#
-#     fig, axes = plt.subplots(nrows=4, ncols=5, sharex='all', sharey='all', figsize=[10, 8])
-#     axes = axes.reshape([-1])
-#     for i in range(num_skills):
-#         ax = axes[i]
-#         setup_axes(ax, limit=1)
-#
-#         states = trajectories[i*40:(i+1)*40].reshape([-1, 2])
-#         ax.scatter(states[:, 0], states[:, 1], s=1)
-#         ax.set_title('skill {}'.format(i))
-#     plt.savefig('./output/vae/skills_kept.png')
-#     plt.close('all)')
+    def scale_data(self, x):
+        return x.div(10)
+
+    def unscale_data(self, x):
+        return x.mul(10)
 
 
 def train_vae(args):
@@ -520,8 +524,9 @@ if __name__ == '__main__':
     args.vae_lr = 5e-4
     args.vae_hidden_size = 256
     args.vae_latent_size = 8
-    args.scale = True
-    args.log_dir = './output/vae/20190114/mvae_lr5e-4_adam_h256_l8_enc4_dec4_bn_beta-0.5_walls_scale'
+    args.vae_plot = True
+    args.vae_scale = False
+    args.log_dir = './output/vae/20190114/mvae_lr5e-4_adam_h256_l8_enc4_dec4_bn_beta-0.5_walls'
     # args.log_dir = './output/vae/20190110/mvae_lr1e-3_adam_h256_l8_beta-1_skills-all_bn'
 
     os.makedirs(args.log_dir, exist_ok=True)
