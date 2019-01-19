@@ -14,6 +14,7 @@ import ipdb
 from utils.early_stopping import EarlyStopping
 from visualize import add_time, setup_axes
 import pickle
+import copy
 
 class LinearReLUBatchNorm(nn.Module):
     def __init__(self, input_size, output_size):
@@ -46,8 +47,11 @@ class VAEModel(nn.Module):
             self.encode_hidden.add_module('hidden_{}'.format(i+1),
                                           LinearReLUBatchNorm(self.hidden_size, self.hidden_size))
 
-        self.mean_z = nn.Linear(self.hidden_size, self.latent_size)
-        self.logvar_z = nn.Linear(self.hidden_size, self.latent_size)
+        self.mean_h = nn.Linear(self.hidden_size, self.latent_size)
+        self.weight_h = nn.Sequential(
+            nn.Linear(self.hidden_size, self.latent_size),
+            nn.ReLU()
+        )
 
         # decoder
         self.decode_hidden = nn.Sequential(
@@ -87,13 +91,18 @@ class VAEModel(nn.Module):
 
         h = self.encode_hidden(x)
 
-        mean_z, logvar_z = self.mean_z(h), self.logvar_z(h)
-        mean_z = mean_z.reshape(*orig_shape, mean_z.shape[-1])
-        logvar_z = logvar_z.reshape(*orig_shape, logvar_z.shape[-1])
-        return mean_z, logvar_z
+        mean_h, weight_h = self.mean_h(h), self.weight_h(h) + 1e-5
+        mean_h = mean_h.reshape(*orig_shape, mean_h.shape[-1])
+        weight_h = weight_h.reshape(*orig_shape, weight_h.shape[-1])
+        return mean_h, weight_h
 
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
+    def reparameterize(self, mu, logvar=None, var=None):
+        if logvar is not None:
+            std = torch.exp(0.5 * logvar)
+        elif var is not None:
+            std = torch.sqrt(var)
+        else:
+            raise RuntimeError
         eps = torch.randn_like(std)
         return eps.mul_(std).add_(mu)
 
@@ -107,7 +116,7 @@ class VAEModel(nn.Module):
         mean_x = mean_x.reshape(*orig_shape, mean_x.shape[-1])
         logvar_x = logvar_x.reshape(*orig_shape, logvar_x.shape[-1])
 
-        logvar_x = logvar_x.clamp(max=5.0)  # can get to inf
+        logvar_x = logvar_x.clamp(max=4.0)  # can get to inf
         logvar_x = logvar_x.exp().add(0.01).log()     # add some variance to regularize
 
         return mean_x, logvar_x
@@ -115,10 +124,12 @@ class VAEModel(nn.Module):
     def _get_time(self):
         return torch.eye(self.episode_length).to(self.device)
 
-    def _aggregate_z_param(self, z_param):
-        assert z_param.dim() == 3
-        assert z_param.shape[1] == self.episode_length
-        return z_param.mean(dim=1).unsqueeze(1)
+    def _compute_posterior(self, mean_h, weight_h):
+        assert mean_h.shape[-2] == weight_h.shape[-2] <= self.episode_length
+        weight_h_sum = weight_h.sum(dim=-2, keepdim=True)
+        var_z = weight_h_sum.reciprocal()
+        mean_z = (mean_h * weight_h).sum(dim=-2, keepdim=True) / weight_h_sum
+        return mean_z, var_z
 
     def _get_reconstruction_latent(self, z):
         batch_shape = z.shape[:-2]
@@ -128,20 +139,20 @@ class VAEModel(nn.Module):
 
     def forward(self, x):
         # VAE
-        batch_size, episode_size, obs_size = x.shape
-        mean_z, logvar_z = self.encode(x)
+        batch_shape = x.shape[:-2]
+        mean_h, weight_h = self.encode(x)
 
         # one weird trick
-        mean_z = self._aggregate_z_param(mean_z)
-        logvar_z = self._aggregate_z_param(logvar_z)
+        mean_z, var_z = self._compute_posterior(mean_h, weight_h)
+        mean_z = mean_z.expand(*batch_shape, self.episode_length, -1)
+        var_z = var_z.expand(*batch_shape, self.episode_length, -1)
 
         # condition generation on time
-        z = self.reparameterize(mean_z, logvar_z)
-        z = z.expand([-1, episode_size, -1])  # conditional independence of states given skill
+        z = self.reparameterize(mean_z, var=var_z)
         latent = self._get_reconstruction_latent(z)
 
         mean_x, logvar_x = self.decode(latent)
-        return mean_z, logvar_z, mean_x, logvar_x
+        return mean_z, var_z, mean_x, logvar_x
 
     def _log_likelihood(self, x, mean_x, logvar_x):
         assert x.shape == mean_x.shape == logvar_x.shape
@@ -150,12 +161,12 @@ class VAEModel(nn.Module):
         log_likelihood = -0.5 * self.input_size * self.log_2_pi + log_likelihood
         return log_likelihood
 
-    def _kl_divergence(self, mean_z, logvar_z):
-        kl_divergence = -0.5 * torch.sum(1 + logvar_z - mean_z.pow(2) - logvar_z.exp(), dim=-1)
+    def _kl_divergence(self, mean_z, var_z):
+        kl_divergence = -0.5 * torch.sum(1 + var_z.log() - mean_z.pow(2) - var_z, dim=-1)
         return kl_divergence
 
-    def _elbo(self, x, mean_z, logvar_z, mean_x, logvar_x, beta):
-        elbo = self._log_likelihood(x, mean_x, logvar_x) - beta * self._kl_divergence(mean_z, logvar_z)
+    def _elbo(self, x, mean_z, var_z, mean_x, logvar_x, beta):
+        elbo = self._log_likelihood(x, mean_x, logvar_x) - beta * self._kl_divergence(mean_z, var_z)
         return elbo
 
 
@@ -175,7 +186,7 @@ class VAE:
             lr=self.args.vae_lr,
         )
 
-        self.scale = self.args.vae_scale
+        self.normalize = self.args.vae_normalize
 
         # self.beta = lambda t: min(1, args.vae_beta + 1e-3 * t)
         self.beta = lambda t: args.vae_beta
@@ -189,7 +200,7 @@ class VAE:
         else:
             filename = self.filename
         if os.path.isfile(filename):
-            self.model.load_state_dict(torch.load(filename))
+            self.model = torch.load(filename)
             self.model.eval()
             print('loaded {}'.format(self.filename))
             self.model.to(self.device)
@@ -213,7 +224,7 @@ class VAE:
         else:
             raise ValueError
 
-        trajectories = self.scale_data(trajectories)
+        trajectories = self.normalize_data(trajectories)
 
         assert self.episode_length == trajectories.shape[1]
 
@@ -245,14 +256,17 @@ class VAE:
             filter(lambda x: x.requires_grad, self.model.parameters()),
             lr=self.args.vae_lr,
         )
-        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.scale else 0.02, patience=300)
+        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.normalize else 0.02, patience=300)
 
         dataset_train, dataset_test = self.preprocess_trajectories(trajectories)
 
+        num_trajectories = len(dataset_train)
+        batch_size = num_trajectories // self.args.vae_batches
+
         loader_train = torch.utils.data.DataLoader(
-            dataset_train, shuffle=True, batch_size=self.args.vae_batch_size, num_workers=2)
+            dataset_train, shuffle=True, batch_size=batch_size, num_workers=2)
         loader_test = torch.utils.data.DataLoader(
-            dataset_test, shuffle=False, batch_size=self.args.vae_batch_size, num_workers=2)
+            dataset_test, shuffle=False, batch_size=batch_size, num_workers=2)
 
         if iteration == 0:
             num_max_epoch = 1000
@@ -275,7 +289,8 @@ class VAE:
                     t.close()
                     break
 
-        torch.save(self.model.state_dict(), self.filename)
+        model = copy.deepcopy(self.model).cpu()
+        torch.save(model, self.filename)
         print('wrote vae model to {}'.format(self.filename))
 
     def _train(self, loader, i_epoch):
@@ -287,8 +302,8 @@ class VAE:
             self.optimizer.zero_grad()
 
             # VAE
-            mean_z, logvar_z, mean_x, logvar_x = self.model(x)
-            elbo = self.model._elbo(x, mean_z, logvar_z, mean_x, logvar_x, self.beta(i_epoch))
+            mean_z, var_z, mean_x, logvar_x = self.model(x)
+            elbo = self.model._elbo(x, mean_z, var_z, mean_x, logvar_x, self.beta(i_epoch))
             loss = -elbo.mean()
 
             if (loss != loss).any() or (loss == float('inf')).any() or (loss == -float('inf')).any():
@@ -313,10 +328,10 @@ class VAE:
                 x = x.to(self.device)
 
                 # VAE
-                mean_z, logvar_z, mean_x, logvar_x = self.model(x)
-                elbo = self.model._elbo(x, mean_z, logvar_z, mean_x, logvar_x, self.beta(i_epoch))
+                mean_z, var_z, mean_x, logvar_x = self.model(x)
+                elbo = self.model._elbo(x, mean_z, var_z, mean_x, logvar_x, self.beta(i_epoch))
                 loss = -elbo.mean()
-                x_recon_ = self.model.reparameterize(mean_x, logvar_x)
+                x_recon_ = self.model.reparameterize(mean_x, logvar=logvar_x)
                 x_recon.append(x_recon_)
 
                 x_orig.append(x)
@@ -340,8 +355,8 @@ class VAE:
                 setup_axes(ax, limit=10, walls=True)
                 ax.set_title(title)
 
-                if self.scale:
-                    x_plot = self.unscale_data(x_plot)
+                if self.normalize:
+                    x_plot = self.unnormalize_data(x_plot)
 
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
 
@@ -357,8 +372,8 @@ class VAE:
             for i_col, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction', 'sample mean'])):
                 axes[0, i_col].set_title(title)
 
-                if self.scale:
-                    x_plot = self.unscale_data(x_plot)
+                if self.normalize:
+                    x_plot = self.unnormalize_data(x_plot)
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
                 x_plot = add_time(x_plot.cpu().numpy())
 
@@ -404,8 +419,8 @@ class VAE:
         assert s.shape[1] == self.model.input_size
         assert z.shape[1] == self.model.latent_size
 
-        if self.scale:
-            s = self.scale_data(s)
+        if self.normalize:
+            s = self.normalize_data(s)
 
         self.model.eval()
 
@@ -422,30 +437,34 @@ class VAE:
             log_likelihood = log_likelihood.exp().mean(dim=1).log()     # marginalize out t
         return log_likelihood.cpu()
 
-    def log_marginal(self, s):
+    def log_marginal(self, s, traj):
         assert s.shape[1] == self.model.input_size
         assert s.dim() == 2
+        assert traj.shape[0] == s.shape[0] == self.args.num_processes
+        assert traj.shape[2] == self.model.input_size
+        assert traj.dim() == 3
+
         self.model.eval()
         # (i_process, i_repetition, i_t, i_feature)
-        num_processes = s.shape[0]
         num_z_samples = 16     # samples of z per x; for the expectation under q(z|x)
 
-        if self.scale:
-            s = self.scale_data(s)
+        if self.normalize:
+            s = self.normalize_data(s)
+            traj = self.normalize_data(traj)
 
         with torch.no_grad():
-            x = s.to(self.device).reshape(s.shape[0], 1, 1, s.shape[1]).expand([-1, num_z_samples, self.episode_length, -1])
-            mean_z, logvar_z = self.model.encode(x)
-            z = self.model.reparameterize(mean_z, logvar_z)
-            z = z.expand([-1, -1, self.episode_length, -1])
-            z_and_t = self.model._get_reconstruction_latent(z)
-            mean_x, logvar_x = self.model.decode(z_and_t)
+            traj = traj.to(self.device).reshape(traj.shape[0], 1, traj.shape[1], traj.shape[2])
+            traj = traj.expand([-1, num_z_samples, -1, -1])
+            mean_z, var_z, mean_x, logvar_x = self.model(traj)
 
-            log_likelihood = self.model._log_likelihood(x, mean_x, logvar_x)
+            s = s.to(self.device).reshape(s.shape[0], 1, 1, s.shape[1])
+            s = s.expand([-1, num_z_samples, self.episode_length, -1])
+
+            log_likelihood = self.model._log_likelihood(s, mean_x, logvar_x)
             assert log_likelihood.shape[2] == self.episode_length
             log_likelihood = log_likelihood.exp_().mean(dim=2).log_()
 
-            kl_divergence = self.model._kl_divergence(mean_z, logvar_z)
+            kl_divergence = self.model._kl_divergence(mean_z, var_z)
             kl_divergence = kl_divergence[:, :, 0]   # duplicated across time
 
             elbo = log_likelihood - kl_divergence
@@ -462,7 +481,7 @@ class VAE:
         latent = self.model._get_reconstruction_latent(z)
         with torch.no_grad():
             mean_x, logvar_x = self.model.decode(latent)
-            x = self.model.reparameterize(mean_x, logvar_x)
+            x = self.model.reparameterize(mean_x, logvar=logvar_x)
 
         x = x.reshape([num_samples, self.episode_length, self.model.input_size])
         mean_x = mean_x.reshape([num_samples, self.episode_length, self.model.input_size])
@@ -471,15 +490,19 @@ class VAE:
     def to(self, device):
         self.model.to(device)
 
-    def scale_data(self, x):
-        return x.div(10)
+    def normalize_data(self, x):
+        if 'Point2D' in self.args.env_name:
+            x = x.div(10)
+        return x
 
-    def unscale_data(self, x):
-        return x.mul(10)
+    def unnormalize_data(self, x):
+        if 'Point2D' in self.args.env_name:
+            x = x.mul(10)
+        return x
 
 
 def train_vae(args):
-    vae = VAE(args)
+    vae = VAE(args, input_size=2)
 
     # Abhishek's point mass data
     # trajectories = np.load('./mixture/data_itr20.pkl')
@@ -492,67 +515,37 @@ def train_vae(args):
     indices = np.random.choice(len(trajectories), subsample_num, replace=True)
     trajectories = torch.stack([trajectories[index] for index in indices])
 
-    trajectories = trajectories / 10
-
     # i_skill_keep = np.array([1, 3, 9, 10, 11, 13])
     #
     # trajectories = trajectories.reshape([20, 40, 100, 2])
     # trajectories = trajectories[i_skill_keep]
     # trajectories = trajectories.reshape([-1, 100, 2])
 
-    vae.fit(trajectories)
-    # visualize(trajectories)
+    vae.fit(trajectories, iteration=1)
 
 
 def validate_vae(args):
-    vae = VAE(args)
+    vae = VAE(args, input_size=2)
+    vae.load(iteration=1)
 
-    # sample trajectories from prior
-    z, x, x_mean = vae.sample(num_samples=200)
+    history = pickle.load(open('./output/point2d/20190108/context-all_mog_K50_T50_lambda0.5_ent0.1_N1000_/history.pkl', 'rb'))
+    trajectories = history['trajectories']
 
-    def plot():
+    trajectories = list(chain(*trajectories))
+    subsample_num = 1000
+    indices = np.random.choice(len(trajectories), subsample_num, replace=True)
+    trajectories = torch.stack([trajectories[index] for index in indices])
 
-        fig, axes = plt.subplots(nrows=1, ncols=2, figsize=[10, 5])
-        axes = axes.reshape([-1])
+    args.num_processes = 5
 
-        for i, x_plot in enumerate([x, x_mean]):
-            ax = axes[i]
-            setup_axes(ax, limit=1 if args.scale else 10, walls=False if args.scale else True)
+    traj = trajectories[-5:]
+    traj_part = traj[:, :25, :]
+    state = traj_part[:, -1, :]
 
-            x_plot = add_time(x_plot.cpu().numpy())
-
-            x_plot = x_plot.reshape([-1, x_plot.shape[-1]])
-            sc = ax.scatter(x_plot[:, 0], x_plot[:, 1], c=x_plot[:, 2], s=1 ** 2)
-
-            plt.colorbar(sc, ax=ax)
-
-        plt.savefig(os.path.join(args.log_dir, 'samples.png'))
-        plt.close('all')
-
-    plot()
-
-
-    # evaluate
-
-    z = z[:, 0, :]    # align
-    t = 25
-    s = x_mean[:, t, :]
-
-    vae.model.to(vae.model.device)
-
-    # s_given_z
-
-    s_given_z = vae.s_given_z(s, z)
-
-    s = x[:, t, :]
-    s_given_z_2 = vae.s_given_z(s, z)
-
-    # marginal
-    p_s_0 = vae.marginal(x[:, 0, :])  # should be high; everything starts at the same place
-    p_s_25 = vae.marginal(x[:, 25, :])    # should be lower
+    log_marginal = vae.log_marginal(state, traj_part)
 
     ipdb.set_trace()
-    p = 1
+
 
 
 if __name__ == '__main__':
@@ -563,18 +556,23 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     args = parser.parse_args()
-    args.device = torch.device('cuda:0')
-    # args.max_components = 30
+    args.device = 'cuda:0'
+    # args.num_components = 30
     args.episode_length = 50
     args.seed = 1
-    args.vae_beta = 0.5
+    args.vae_beta = 0.6
     args.vae_lr = 5e-4
     args.vae_hidden_size = 256
     args.vae_latent_size = 8
+    args.vae_layers = 4
     args.vae_plot = True
-    args.vae_scale = False
-    args.log_dir = './output/vae/20190114/mvae_lr5e-4_adam_h256_l8_enc4_dec4_bn_beta-0.5_walls'
-    # args.log_dir = './output/vae/20190110/mvae_lr1e-3_adam_h256_l8_beta-1_skills-all_bn'
+    args.vae_normalize = True
+    args.vae_max_fit_epoch = 1000
+    args.vae_weights = None
+    args.vae_batches = 16
+    args.log_dir = './output/vae/20190118/traj_debug_beta0.6_lr5e-4_h256_l8_layers4_b8'
+
+    args.env_name = 'Point2DWalls-corner-v0'
 
     os.makedirs(args.log_dir, exist_ok=True)
 
