@@ -146,7 +146,7 @@ class Point2DEnv(MultitaskEnv, Serializable):
         return False
 
     def _get_obs(self):
-        return dict(
+        return OrderedDict(
             observation=self._position.copy(),
             desired_goal=self._target_position.copy(),
             achieved_goal=self._position.copy(),

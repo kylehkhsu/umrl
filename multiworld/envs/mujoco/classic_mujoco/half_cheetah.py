@@ -63,7 +63,7 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
     def _get_obs(self):
         state_obs = self._get_env_obs()
         achieved_goal = state_obs[8]
-        return dict(
+        return OrderedDict(
             observation=state_obs,
             desired_goal=self._state_goal,
             achieved_goal=achieved_goal,
