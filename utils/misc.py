@@ -42,14 +42,53 @@ def calculate_state_entropy(args, trajectories):
     if 'Point2D' in args.env_name:
         bins = 100
         bounds = (np.array([-10, 10]), np.array([-10, 10]))
+        data = torch.cat(trajectories, dim=0).numpy()
+        p_s = np.histogramdd(data, bins=bins, range=bounds, density=True)[0]
+        H_s = -np.sum(p_s * np.ma.log(p_s))
+    elif 'HalfCheetah' in args.env_name:
+        H_s = 0
     else:
         raise ValueError
-
-    data = torch.cat(trajectories, dim=0).numpy()
-    p_s = np.histogramdd(data, bins=bins, range=bounds, density=True)[0]
-    H_s = -np.sum(p_s * np.ma.log(p_s))
     return H_s
 
 
+class Normalizer:
+    def __init__(self):
+        self.count = torch.zeros(1)
+        self.mean = torch.zeros(1)
+        self.M2 = torch.zeros(1)
+
+    def observe(self, x):
+        for x_ in x:
+            self.count.add_(1)
+            delta = x_ - self.mean
+            self.mean.add_(delta / self.count)
+            delta2 = x_ - self.mean
+            self.M2.add_(delta * delta2)
+
+    def normalize(self, x):
+        if self.count < 2:
+            return x
+        variance = self.M2 / self.count
+        std = torch.clamp(torch.sqrt(variance), min=0.001)
+        return (x - self.mean) / std
+
+    def reset(self):
+        self.mean.zero_()
+        self.count.zero_()
+        self.M2.zero_()
+
+
 if __name__ == '__main__':
-    pass
+    def test_norm(x):
+        norm = Normalizer()
+        norm.observe(x)
+        x_normed = norm.normalize(x)
+
+        print(x_normed)
+
+    x = torch.Tensor([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5])
+    test_norm(x)
+
+    x = torch.zeros(10)
+    test_norm(x)

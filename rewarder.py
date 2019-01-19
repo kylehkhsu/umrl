@@ -39,6 +39,9 @@ class Rewarder:
     def fit(self, **kwargs):
         pass
 
+    def reset_episode(self):
+        pass
+
 
 class UnsupervisedRewarder(Rewarder):
     def __init__(self, args, obs_raw_shape, **kwargs):
@@ -83,6 +86,8 @@ class UnsupervisedRewarder(Rewarder):
             raise NotImplementedError
         elif self.args.clusterer == 'vae':
             self.clusterer = VAE(args, obs_raw_shape[0])
+            if self.args.vae_load:
+                self.clusterer.load(iteration=0, load_from=self.args.vae_weights)
         else:
             raise ValueError
 
@@ -94,7 +99,7 @@ class UnsupervisedRewarder(Rewarder):
     def _calculate_reward(self, task_current, obs_raw, action, **kwargs):
         reward_info = dict()
 
-        if self.fit_counter == 0:
+        if self.fit_counter == 0 and not self.args.vae_load:
             reward = torch.zeros(self.args.num_processes)
             reward_info['log_marginal'] = torch.zeros(self.args.num_processes)
             reward_info['lambda_log_s_given_z'] = torch.zeros(self.args.num_processes)
@@ -102,8 +107,12 @@ class UnsupervisedRewarder(Rewarder):
 
         if self.args.reward == 's|z':
             if self.args.clusterer == 'vae':
+                if kwargs.get('latent') is not None:
+                    z = kwargs['latent']
+                else:
+                    z = torch.from_numpy(np.stack(task_current, axis=0).astype(dtype=np.float32))
 
-                log_s_given_z = self.clusterer.log_s_given_z(s=obs_raw, z=kwargs['latent'])
+                log_s_given_z = self.clusterer.log_s_given_z(s=obs_raw, z=z)
                 log_marginal = self.clusterer.log_marginal(s=obs_raw)
 
                 log_s_given_z = guard_against_underflow(log_s_given_z)
@@ -139,6 +148,11 @@ class UnsupervisedRewarder(Rewarder):
             reward = rewards.mean(dim=0)
         return reward, reward_info
 
+    def get_assess_tasks(self):
+        if self.args.clusterer == 'vae':
+            tasks = np.random.randn(10, self.args.vae_latent_size)
+        return tasks
+
     def _sample_task_one(self, i_process):
         if self.fit_counter == 0 and self.args.clusterer != 'vae':
             return None
@@ -158,7 +172,7 @@ class UnsupervisedRewarder(Rewarder):
 
         return task
 
-    def fit(self, trajectories, component_ids):
+    def fit(self, trajectories, component_ids=None):
         self._pre_fit(trajectories, component_ids)
 
         if len(self.fit_counter_to_trajectories) > 0 and self.args.subsample_num < len(list(chain(*self.fit_counter_to_trajectories))):
@@ -252,8 +266,16 @@ class UnsupervisedRewarder(Rewarder):
 class SupervisedRewarder(Rewarder):
     def __init__(self, args, **kwargs):
         super(SupervisedRewarder, self).__init__(args, **kwargs)
+        if 'HalfCheetah' in self.args.env_name:
+            if self.args.task_type == 'direction':
+                if self.args.tasks == 'single':
+                    self.context_shape = (1,)
+                elif self.args.tasks == 'two':
+                    self.context_shape = (2,)
 
-    def _calculate_reward(self, task, obs_raw, action, env_info=None):
+        self.component_id = np.zeros(self.args.num_processes, dtype=np.int)
+
+    def _calculate_reward(self, task, obs_raw, action, env_info=None, **kwargs):
         if 'Point2D' in self.args.env_name:
             goal = torch.Tensor(task)
             assert goal.shape == obs_raw.shape
@@ -277,14 +299,18 @@ class SupervisedRewarder(Rewarder):
                 # reward = self.args.dense_coef * dense_reward + \
                 #          self.args.success_coef * success_reward + reward_ctrl
             elif self.args.task_type == 'direction':
-                direction = torch.Tensor(task)
-                assert torch.all((direction==1) + (direction==-1))
+                direction = torch.Tensor(task)[:, 0:1] == 1
+                direction = direction.float()
+                direction[direction == 0] = -1
+                assert torch.all((direction == 1) + (direction == -1))
                 # vel = obs_raw[:, 8].unsqueeze(1).cpu()
                 dense_reward = direction * velocity.cpu()
                 reward = self.args.dense_coef * dense_reward + reward_ctrl
                 reward = reward.squeeze(1)
 
-        return reward
+        reward_info = {}
+
+        return reward, reward_info
 
     def _sample_task_one(self, i_process):
         # rand = 2 * (np.random.random_sample((2,)) - 0.5)    # \in [-1, 1]
@@ -337,16 +363,16 @@ class SupervisedRewarder(Rewarder):
                 elif task_id == 3:
                     goal = np.array([-8, 8])
 
-        elif self.args.env_name == 'HalfCheetahVel-v0':
+        elif 'HalfCheetah' in self.args.env_name:
             if self.args.task_type == 'direction':
                 if self.args.tasks == 'single':
                     goal = np.array([1])
                 elif self.args.tasks == 'two':
                     task_id = np.random.randint(low=0, high=2)
                     if task_id == 0:
-                        goal = np.array([1])
+                        goal = np.array([1, 0])
                     elif task_id == 1:
-                        goal = np.array([-1])
+                        goal = np.array([0, 1])
             elif self.args.task_type == 'goal':
                 if self.args.tasks == 'single':
                     goal = np.array([3])
@@ -374,10 +400,13 @@ class SupervisedRewarder(Rewarder):
 
     def get_assess_tasks(self):
         tasks = None
-        if self.args.env_name == 'HalfCheetahVel-v0':
+        if 'HalfCheetah' in self.args.env_name:
             if self.args.task_type == 'direction':
-                if self.args.tasks == 'two':
-                    tasks = np.array([-1, 1])
+                if self.args.tasks == 'single':
+                    tasks = np.array([[1]])
+                elif self.args.tasks == 'two':
+                    tasks = np.array([[1, 0],
+                                      [0, 1]])
         elif self.args.env_name == 'Point2DWalls-center-v0':
             if self.args.tasks == 'four':
                 tasks = np.array([[5, 5],
@@ -397,20 +426,23 @@ class SupervisedRewarder(Rewarder):
                                   [-x, x],
                                   [-x, -x]])
         elif self.args.env_name == 'Point2DWalls-corner-v0':
-            x = np.sqrt(25 / 2)
-            tasks = np.array([[0, 5],
-                              [5, 0],
-                              [0, -5],
-                              [-5, 0],
-                              [x, x],
-                              [x, -x],
-                              [-x, x],
-                              [-x, -x]])
+            tasks = np.array([[-10, -10],
+                              [-8, -8],
+                              [-8, -5],
+                              [-8, 0],
+                              [-8, 5],
+                              [-10, 10],
+                              [0, 0],
+                              [10, 0],
+                              [8, 8]])
         if tasks is None:
             raise ValueError
         return tasks
 
-    def fit(self):
+    def fit(self, *args, **kwargs):
+        return
+
+    def reset_episode(self, *args, **kwargs):
         return
 
 

@@ -38,6 +38,9 @@ RUN source activate umrl && pip install gym
 RUN mkdir $HOME/install && cd $HOME/install && git clone https://github.com/openai/baselines.git
 RUN source activate umrl && pip install -e $HOME/install/baselines
 
-# delay loading code until last
+# setup symbolic link
 WORKDIR $HOME/experiments/umrl
-COPY . .
+RUN mkdir -p $HOME/store/umrl/output
+USER root
+RUN ln -s $HOME/store/umrl/output $HOME/experiments/umrl
+USER docker

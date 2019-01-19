@@ -5,6 +5,7 @@ import ipdb
 import torch
 import datetime
 import numpy as np
+import doodad as dd
 
 from env_interface import ContextualEnvInterface
 from utils import logger
@@ -17,110 +18,13 @@ from multiworld.envs.pygame.point2d import Point2DEnv, Point2DTrajectoryEnv
 from multiworld.envs.mujoco.classic_mujoco.half_cheetah import HalfCheetahEnv
 from utils.misc import save_model, calculate_state_entropy
 from utils.looker import Looker
-# from visualize import visualize
-from visualize import plot_and_save
 from subprocess import Popen
 
+# log_dir_root = dd.get_args('log_dir_root')
+
+log_dir_root = '~/store/umrl/output'
+
 args = get_args()
-# args.clusterer = 'gaussian'     # bayesian or gaussian or discriminator
-#
-# if args.clusterer == 'discriminator':
-#
-#     args.cuda = False
-#     args.algo = 'ppo'
-#     # args.env_name = 'Point2DEnv-traj-v0'
-#     # args.env_name = 'Point2DEnv-v0'
-#     args.env_name = 'Point2DWalls-corner-v0'
-#     args.use_gae = True
-#     args.gamma = 1
-#     args.action_limit = 1.0    # change in env creation if not 1.0
-#     args.obs = 'pos'    # pos or pos_speed
-#     args.fixed_start = True
-#     args.sparse_reward = False
-#
-#     args.episode_length = 30
-#     args.num_processes = 10
-#     args.trajectories_per_update = 200
-#     args.trajectories_per_process_per_update = args.trajectories_per_update // args.num_processes
-#     args.num_steps = args.episode_length * args.trajectories_per_process_per_update
-#     args.num_updates = 500
-#     args.num_clusterings = 250
-#     args.clustering_period = args.num_updates // args.num_clusterings
-#     args.trajectories_per_clustering = args.trajectories_per_process_per_update * args.num_processes \
-#         * args.clustering_period
-#     args.cluster_subsample_num = 10000    # trajectories
-#     args.cluster_subsample_strategy = 'all'  # random or last or something_else=all
-#     args.keep_entire_history = False
-#
-#     args.context = 'one_hot'     # cluster_mean or goal or one_hot
-#     args.trajectory_embedding_type = 'avg'
-#     args.task_sampling = 'uniform'     # max_I or uniform or EM
-#     args.save_period = 50
-#     args.component_weight_threshold = 1e-7
-#     args.reward = 'z|w'     # w|z or l2 or z|w
-#     args.entropy_coef = 0.003  # default: 0.01
-#     args.standardize_data = False
-#     args.component_constraint_l_inf = 0.01
-#     args.component_constraint_l_2 = 0.01
-#     args.max_components = 50
-#     args.cluster_on = 'state'   # state or trajectory_embedding
-#     args.weight_concentration_prior = 1e8    # 1 or 1000 or 100000
-#     args.vis_type = 'png'
-#     args.visualize_period = 10
-#
-#     args.log_dir = './output/point2d/20190102/disc_entropy0.003'
-#     # args.log_dir = './output/debug/20190102/disc'
-# else:
-#     args.cuda = False
-#     args.algo = 'ppo'
-#     # args.env_name = 'Point2DEnv-traj-v0'
-#     # args.env_name = 'Point2DEnv-v0'
-#     args.env_name = 'Point2DWalls-corner-v0'
-#     args.use_gae = True
-#     args.gamma = 1
-#     args.action_limit = 1.0    # change in env creation if not 1.0
-#     args.obs = 'pos'    # pos or pos_speed
-#     args.fixed_start = True
-#     args.sparse_reward = False
-#
-#     args.episode_length = 30
-#     args.num_processes = 10
-#     args.trajectories_per_update = 200
-#     args.trajectories_per_process_per_update = args.trajectories_per_update // args.num_processes
-#     args.num_steps = args.episode_length * args.trajectories_per_process_per_update
-#     args.num_updates = 1000
-#     args.num_clusterings = 50
-#     args.clustering_period = args.num_updates // args.num_clusterings
-#     args.trajectories_per_clustering = args.trajectories_per_process_per_update * args.num_processes \
-#         * args.clustering_period
-#     args.cluster_subsample_num = 100000    # trajectories
-#     args.cluster_subsample_strategy = 'random'  # random or last or skew or something_else=all
-#     args.keep_entire_history = True
-#
-#     args.context = 'cluster_mean'     # cluster_mean or goal or one_hot
-#     args.trajectory_embedding_type = 'avg'
-#     args.task_sampling = 'EM'     # max_I or uniform or EM
-#     args.save_period = 50
-#     args.component_weight_threshold = 0
-#     args.reward = 'w|z'     # w|z or l2 or z|w
-#     args.conditional_coef = 0.8
-#     args.entropy_coef = 0  # default: 0.01
-#     args.component_constraint_l_inf = 0.01
-#     args.component_constraint_l_2 = 0.01
-#     args.max_components = 50
-#     args.cluster_on = 'state'   # state or trajectory_embedding
-#     args.weight_concentration_prior = 1e8    # 1 or 1000 or 100000
-#     args.vis_type = 'png'
-#     args.visualize_period = args.clustering_period
-#     args.log_EM = True
-#
-#
-#     args.log_dir = './output/point2d/20190103/gen-state_entropy0_conditional0.8_pz-EM'
-#     # args.log_dir = './output/debug/20190103/w_given_z'
-#
-# if args.clusterer == 'discriminator':
-#     assert args.cluster_on == 'state'
-#     assert args.context == 'one_hot'
 
 # objective optimization
 args.cuda = True
@@ -146,8 +50,8 @@ args.cumulative_reward = False
 args.clusterer = 'vae'  # mog or dp-mog or diayn or vae
 args.max_components = 25    # irrelevant for vae
 args.reward = 's|z'     # s|z or z|s
-args.conditional_coef = 0.2
-args.rewarder_fit_period = 50
+args.conditional_coef = 0.8
+args.rewarder_fit_period = 25
 args.subsample_num = 2048
 args.weight_concentration_prior = 1e5   # specific to dp-mog
 args.subsample_strategy = 'last-random'    # skew or random or last-random
@@ -178,12 +82,14 @@ args.episode_length = 30
 args.trials_per_update = 100
 args.trials_per_process_per_update = args.trials_per_update // args.num_processes
 args.num_steps = args.episode_length * args.trial_length * args.trials_per_process_per_update
-args.num_updates = 1000
+args.num_updates = 0
 
 # logging, saving, visualization
 args.save_period = args.rewarder_fit_period
 args.vis_period = args.rewarder_fit_period
-args.log_dir = './output/point2d/20190115/context_vae-warm_policy-warm_lambda0.5_P50_N1000'
+args.experiment_name = 'point2d/20190115/context_vae-warm_policy-warm_lambda0.8_P25_N1'
+# args.experiment_name = 'test'
+args.log_dir = os.path.join(log_dir_root, args.experiment_name)
 # args.log_dir = './output/debug/point2d/201901114/context_mog'
 args.look = False
 args.plot = True
@@ -311,12 +217,6 @@ def train():
         log_marginal_avg = log_marginal / args.trials_per_update / (args.trial_length * args.episode_length)
         lambda_log_s_given_z_avg = lambda_log_s_given_z / args.trials_per_update / (args.trial_length * args.episode_length)
 
-        # if j % args.visualize_period == 0:
-        #     print('making visualization')
-        #     visualize_start = time.time()
-        #     visualize(rewarder.history, which='last')
-        #     visualize_time += time.time() - visualize_start
-
         num_steps = (j + 1) * args.num_steps * args.num_processes
         num_episodes = num_steps // args.episode_length
         num_trials = num_episodes // args.trial_length
@@ -332,13 +232,11 @@ def train():
         logger.logkv('trials', num_trials)
         logger.logkv('policy_updates', (j + 1))
         logger.logkv('time', time.time() - start)
-        # logger.logkv('num_valid_components', len(rewarder.valid_components))
         logger.logkv('policy_forward_time', policy_forward_time)
         logger.logkv('policy_update_time', policy_update_time)
         logger.logkv('step_time_rewarder', step_time_rewarder)
         logger.logkv('step_time_env', step_time_env)
         logger.logkv('step_time_total', step_time_total)
-        # logger.logkv('discriminator_loss', rewarder.discriminator_loss)
         logger.logkv('visualize_time', visualize_time)
         logger.logkv('rewarder_fit_time', rewarder_fit_time)
         logger.logkv('log_marginal_avg', log_marginal_avg)
@@ -363,16 +261,6 @@ def train():
                 p = Popen('python visualize.py --log-dir {}'.format(args.log_dir), shell=True)
                 processes.append(p)
             visualize_time += time.time() - visualize_start
-
-            # if j == args.num_updates - 1:
-            #     rewarder.history.new()    # there won't be a new fit_generative_model() call
-            #     visualize(rewarder.history, which='all')
-            # rewarder.history.dump()
-            # print('saved model and history')
-    #
-    # while len(processes) != 0:
-    #     for p in processes:
-    #         p.wait()
 
 
 if __name__ == '__main__':

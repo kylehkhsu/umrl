@@ -59,6 +59,7 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
             self.sim.data.qpos.flat[1:],
             self.sim.data.qvel.flat,
         ])
+
     def _get_obs(self):
         state_obs = self._get_env_obs()
         achieved_goal = state_obs[8]
@@ -69,6 +70,7 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
             state_observation=state_obs,
             state_desired_goal=self._state_goal,
             state_achieved_goal=achieved_goal,
+            x_pos=self.sim.data.qpos[0]
         )
 
     def _get_info(self, ):

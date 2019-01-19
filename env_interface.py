@@ -7,7 +7,7 @@ import time
 from a2c_ppo_acktr.envs import make_vec_envs
 from abc import ABC, abstractmethod
 from rewarder import SupervisedRewarder, UnsupervisedRewarder
-
+from utils.misc import Normalizer
 
 class MultiTaskEnvInterface(ABC):
     def __init__(self, args, mode='train'):
@@ -44,7 +44,7 @@ class MultiTaskEnvInterface(ABC):
         self.step_counter = [0 for i in range(args.num_processes)]
         self.args = args
 
-        if self.args.rewarder == 'supervised' or mode == 'val':
+        if self.args.rewarder == 'supervised' or mode == 'test':
             self.rewarder = SupervisedRewarder(args)
         elif self.args.rewarder == 'unsupervised':
             self.rewarder = UnsupervisedRewarder(args, obs_raw_shape=self.obs_raw_shape)
@@ -91,11 +91,10 @@ class RL2EnvInterface(MultiTaskEnvInterface):
     def __init__(self, args, **kwargs):
         super(RL2EnvInterface, self).__init__(args, **kwargs)
         self.obs_shape = self.obs_raw_shape
-        self.trajectories_pre = []
-        self.trajectories_post = []
-        # self.trajectory_embeddings_pre = []
-        # self.trajectory_embeddings_post = []
+        self.trajectories_pre_current_update = []
+        self.trajectories_post_current_update = []
         self.episode_counter = [0 for i in range(args.num_processes)]
+        self.normalizer = Normalizer()
 
     def _reset_one(self, i_process, obs_raw, **kwargs):
         self.trajectory_current[i_process] = obs_raw[i_process].unsqueeze(0)
@@ -117,8 +116,9 @@ class RL2EnvInterface(MultiTaskEnvInterface):
             obs_act = torch.zeros(self.args.num_processes, self.envs.action_space.shape[0])
         if obs_rew is None:
             obs_rew = torch.zeros(self.args.num_processes, 1)
+            obs_rew = self.normalizer.normalize(obs_rew)
         if obs_flag is None:
-            obs_flag = 2 * torch.ones(self.args.num_processes, 1)  # TODO: 0 or 2?
+            obs_flag = 0 * torch.ones(self.args.num_processes, 1)  # TODO: 0 or 2?
         return obs_raw, obs_act, obs_rew, obs_flag
 
     def step(self, action):
@@ -146,7 +146,8 @@ class RL2EnvInterface(MultiTaskEnvInterface):
             episode_done[i_process] = episode_done_
             trial_done[i_process] = trial_done_
         reward_start = time.time()
-        reward = self._calculate_reward(self.task_current, obs_raw, action, env_info=info_raw)
+        reward, reward_info = self._calculate_reward(self.task_current, obs_raw, action, env_info=info_raw)
+        reward = self._normalize_reward(reward)
         reward_time = time.time() - reward_start
         reward = reward.unsqueeze(1)
 
@@ -168,22 +169,33 @@ class RL2EnvInterface(MultiTaskEnvInterface):
             obs = obs_raw, action, reward, flag
 
         info = dict(reward_time=reward_time, step_time_env=step_time_env)
+        info = {**info, **reward_info}
         return obs, reward, done, info
 
     def _save_episode(self, i_process, save_to=None):
         assert save_to in ['pre', 'post']
         if save_to == 'pre':
-            trajectories = self.trajectories_pre
+            trajectories = self.trajectories_pre_current_update
         else:
-            trajectories = self.trajectories_post
+            trajectories = self.trajectories_post_current_update
         trajectories.append(self.trajectory_current[i_process])
-
-        # self.raw_trajectory_embeddings.append(self.trajectory_to_embedding(i_process))
-        # self.history.save_episode(self.trajectory_current[i_process], self.task_current[i_process])
-        # self.tasks.append(self.task_current[i_process])
 
     def set_task_one(self, task, i_process=0):
         self.task_current[i_process] = task
+
+    def _normalize_reward(self, reward):
+        if self.args.normalize_reward:
+            self.normalizer.observe(reward)
+            reward = self.normalizer.normalize(reward)
+        return reward
+
+    def fit_rewarder(self):
+        self.rewarder.fit(trajectories=self.trajectories_post_current_update)
+        self._post_fit_rewarder()
+
+    def _post_fit_rewarder(self):
+        self.trajectories_post_current_update = []
+        self.trajectories_pre_current_update = []
 
 
 class ContextualEnvInterface(MultiTaskEnvInterface):
@@ -207,6 +219,7 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
 
     def _get_context_tensor(self):
         context = torch.from_numpy(np.concatenate(self.context, axis=0).astype(dtype=np.float32))
+        context = context.reshape([self.args.num_processes, context.shape[-1]])
         return context
 
     def _get_obs(self, obs_raw):

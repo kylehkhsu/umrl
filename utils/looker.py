@@ -40,6 +40,16 @@ class Looker:
     def look(self, iteration=-1):
         # actor_critic, obs_rms = torch.load(os.path.join(self.args.log_dir, self.args.env_name + ".pt"))
         actor_critic, obs_rms = load_model(self.args.log_dir, iteration=iteration)
+
+        episode_returns = [0 for i in range(self.args.trial_length)]
+        episode_final_reward = [0 for i in range(self.args.trial_length)]
+        i_episode = 0
+
+        def _truncate_task_name(task):
+            if len(task) > 4:
+                task = '{}-truncated'.format(task[:3])
+            return task
+
         for task in self.tasks:
             recurrent_hidden_state = torch.zeros(1, actor_critic.recurrent_hidden_state_size)
             mask = torch.zeros(1, 1)
@@ -48,21 +58,31 @@ class Looker:
             self.envs.set_task_one(task)    # must come after reset since reset samples a task
             video = []
             video.extend(self.envs.envs.get_images())
+
+            assert i_episode == 0
+
             for t in range(self.args.episode_length * self.args.trial_length):
                 with torch.no_grad():
                     value, action, _, recurrent_hidden_state = actor_critic.act(
                         obs, recurrent_hidden_state, mask, deterministic=True
                     )
-                obs, rew, done, infos = self.envs.step(action)
+                obs, reward, done, infos = self.envs.step(action)
                 if self.args.interface == 'rl2':
                     masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done['trial']])
+                    episode_returns[i_episode] += reward.sum().item()
+                    if all(done['episode']):
+                        episode_final_reward[i_episode] += reward.sum().item()
+                        i_episode = (i_episode + 1) % self.args.trial_length
                 elif self.args.interface == 'contextual':
                     masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
                 video.extend(self.envs.envs.get_images())
 
-            filename = 'iteration_{}-task_{}.mp4'.format(iteration, task)
+            filename = 'iteration_{}-task_{}.mp4'.format(iteration, _truncate_task_name(task))
             imageio.mimwrite(os.path.join(self.args.log_dir, self.sub_dir, filename), video)
         self.make_html(self.args.log_dir, sub_dir='vis', extension='.mp4')
+
+        return_avg = np.sum(episode_returns) / len(self.tasks)
+        return return_avg, episode_returns, episode_final_reward
 
     def look_all(self, sub_dir='ckpt'):
         contents = os.listdir(os.path.join(self.args.log_dir, sub_dir))
@@ -80,7 +100,7 @@ class Looker:
 
     def make_html(self, root_dir, sub_dir='vis', extension='.mp4'):
         contents = os.listdir(os.path.join(root_dir, sub_dir))
-        regexp = re.compile('iteration_*(\d+)-*(task_*.+){}'.format(extension), flags=re.ASCII)
+        regexp = re.compile('iteration_*(\d+)-*(task_*(?s).*){}'.format(extension), flags=re.ASCII)
         iter_to_media = defaultdict(list)
         for filename in contents:
             match = regexp.search(filename)
@@ -100,11 +120,11 @@ class Looker:
             for (filename, task_info) in sorted(iter_to_media[iter], key=lambda x: x[1]):
                 e = Element()
                 e.addTxt(task_info)
-                e.addVideo(os.path.join(sub_dir, filename))
+                e.addVideo(filename)
                 row.addElement(e)
 
             table.addRow(row)
-        tw = TableWriter(table, outputdir=root_dir, rowsPerPage=len(iter_to_media))
+        tw = TableWriter(table, outputdir=os.path.join(root_dir, sub_dir), rowsPerPage=5)
         tw.write()
 
 

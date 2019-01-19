@@ -41,12 +41,10 @@ class VAEModel(nn.Module):
         self.episode_length = args.episode_length
 
         # encoder
-        self.encode_hidden = nn.Sequential(
-            LinearReLUBatchNorm(self.input_size, self.hidden_size),
-            LinearReLUBatchNorm(self.hidden_size, self.hidden_size),
-            LinearReLUBatchNorm(self.hidden_size, self.hidden_size),
-            LinearReLUBatchNorm(self.hidden_size, self.hidden_size),
-        )
+        self.encode_hidden = nn.Sequential(LinearReLUBatchNorm(self.input_size, self.hidden_size))
+        for i in range(args.vae_layers - 1):
+            self.encode_hidden.add_module('hidden_{}'.format(i+1),
+                                          LinearReLUBatchNorm(self.hidden_size, self.hidden_size))
 
         self.mean_z = nn.Linear(self.hidden_size, self.latent_size)
         self.logvar_z = nn.Linear(self.hidden_size, self.latent_size)
@@ -54,10 +52,10 @@ class VAEModel(nn.Module):
         # decoder
         self.decode_hidden = nn.Sequential(
             LinearReLUBatchNorm(self.latent_size + self.episode_length, self.hidden_size),
-            LinearReLUBatchNorm(self.hidden_size, self.hidden_size),
-            LinearReLUBatchNorm(self.hidden_size, self.hidden_size),
-            LinearReLUBatchNorm(self.hidden_size, self.hidden_size),
         )
+        for i in range(args.vae_layers - 1):
+            self.decode_hidden.add_module('hidden_{}'.format(i+1),
+                                          LinearReLUBatchNorm(self.hidden_size, self.hidden_size))
 
         self.mean_x = nn.Linear(self.hidden_size, self.input_size)
         self.logvar_x = nn.Linear(self.hidden_size, self.input_size)
@@ -183,11 +181,15 @@ class VAE:
         self.beta = lambda t: args.vae_beta
         self.device = args.device
         self.model.to(self.device)
-        
-    def load(self, iteration):
+
+    def load(self, iteration, load_from=None):
         self._set_logging(iteration)
-        if os.path.isfile(self.filename):
-            self.model.load_state_dict(torch.load(self.filename))
+        if load_from:
+            filename = load_from
+        else:
+            filename = self.filename
+        if os.path.isfile(filename):
+            self.model.load_state_dict(torch.load(filename))
             self.model.eval()
             print('loaded {}'.format(self.filename))
             self.model.to(self.device)
@@ -247,10 +249,15 @@ class VAE:
 
         dataset_train, dataset_test = self.preprocess_trajectories(trajectories)
 
-        loader_train = torch.utils.data.DataLoader(dataset_train, shuffle=True, batch_size=1024, num_workers=2)
-        loader_test = torch.utils.data.DataLoader(dataset_test, shuffle=False, batch_size=1024, num_workers=2)
+        loader_train = torch.utils.data.DataLoader(
+            dataset_train, shuffle=True, batch_size=self.args.vae_batch_size, num_workers=2)
+        loader_test = torch.utils.data.DataLoader(
+            dataset_test, shuffle=False, batch_size=self.args.vae_batch_size, num_workers=2)
 
-        num_max_epoch = self.args.vae_max_fit_epoch
+        if iteration == 0:
+            num_max_epoch = 1000
+        else:
+            num_max_epoch = self.args.vae_max_fit_epoch
 
         t = tqdm(range(num_max_epoch))
         for i_epoch in t:
@@ -258,7 +265,7 @@ class VAE:
 
             t.set_description('train loss: {}'.format(loss_train))
 
-            if (i_epoch + 1) % 100 == 0:
+            if (i_epoch + 1) % (num_max_epoch // 10) == 0:
                 loss_test = self._eval(loader_test, i_epoch)
                 # print('epoch: {}\tloss: {}'.format(i_epoch, losses.avg))
                 t.write('epoch: {}\ttrain loss: {}\ttest_loss: {}'.format(i_epoch, loss_train, loss_test))
@@ -309,7 +316,8 @@ class VAE:
                 mean_z, logvar_z, mean_x, logvar_x = self.model(x)
                 elbo = self.model._elbo(x, mean_z, logvar_z, mean_x, logvar_x, self.beta(i_epoch))
                 loss = -elbo.mean()
-                x_recon.append(mean_x)
+                x_recon_ = self.model.reparameterize(mean_x, logvar_x)
+                x_recon.append(x_recon_)
 
                 x_orig.append(x)
 
@@ -322,12 +330,12 @@ class VAE:
 
         self.model.train()
 
-        def plot():
-            ig, axes = plt.subplots(nrows=1, ncols=4, sharex='all', sharey='all',
+        def plot_point():
+            fig, axes = plt.subplots(nrows=1, ncols=4, sharex='all', sharey='all',
                                     figsize=[20, 5])
             axes = axes.reshape([-1])
 
-            for i, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction mean', 'sample mean'])):
+            for i, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction', 'sample mean'])):
                 ax = axes[i]
                 setup_axes(ax, limit=10, walls=True)
                 ax.set_title(title)
@@ -343,11 +351,50 @@ class VAE:
                 sc = ax.scatter(x_plot[:, 0], x_plot[:, 1], c=x_plot[:, 2], s=1 ** 2)
                 plt.colorbar(sc, ax=ax)
 
-            plt.savefig(os.path.join(self.plot_dir, 'epoch_{}.png'.format(i_epoch)))
-            plt.close('all')
+        def plot_cheetah():
+            fig, axes = plt.subplots(nrows=3, ncols=4,
+                                     sharex='row', sharey='row', figsize=[20, 15])
+            for i_col, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction', 'sample mean'])):
+                axes[0, i_col].set_title(title)
+
+                if self.scale:
+                    x_plot = self.unscale_data(x_plot)
+                x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
+                x_plot = add_time(x_plot.cpu().numpy())
+
+                time = x_plot[:, :, -1].reshape([-1, 1])
+
+                i_row = 0
+                rootz = x_plot[:, :, 0].reshape([-1, 1])
+                bthigh = x_plot[:, :, 2].reshape([-1, 1])
+                sc = axes[i_row, i_col].scatter(rootz, bthigh, c=time, s=1**2)
+                # plt.colorbar(sc, ax=axes[i_row, i_col])
+                axes[i_row, i_col].set_xlabel('rootz [m]')
+                axes[i_row, i_col].set_ylabel('bthigh [rad]')
+
+                i_row = 1
+                rootx_vel = x_plot[:, :, 8].reshape([-1, 1])
+                rootz_vel = x_plot[:, :, 9].reshape([-1, 1])
+                sc = axes[i_row, i_col].scatter(rootx_vel, rootz_vel, c=time, s=1**2)
+                # plt.colorbar(sc, ax=axes[i_row, i_col])
+                axes[i_row, i_col].set_xlabel('rootx [m/s]')
+                axes[i_row, i_col].set_ylabel('rootz [m/s]')
+
+                i_row = 2
+                rooty_avel = x_plot[:, :, 10].reshape([-1, 1])
+                bthigh_avel = x_plot[:, :, 11].reshape([-1, 1])
+                sc = axes[i_row, i_col].scatter(rooty_avel, bthigh_avel, c=time, s=1**2)
+                # plt.colorbar(sc, ax=axes[i_row, i_col])
+                axes[i_row, i_col].set_xlabel('rooty [rad/s]')
+                axes[i_row, i_col].set_ylabel('bthigh [rad/s]')
 
         if self.args.vae_plot:
-            plot()
+            if 'Point2D' in self.args.env_name:
+                plot_point()
+            elif 'HalfCheetah' in self.args.env_name:
+                plot_cheetah()
+            plt.savefig(os.path.join(self.plot_dir, 'epoch_{}.png'.format(i_epoch)))
+            plt.close('all')
 
         return losses.avg
 
@@ -381,7 +428,7 @@ class VAE:
         self.model.eval()
         # (i_process, i_repetition, i_t, i_feature)
         num_processes = s.shape[0]
-        num_z_samples = 128     # samples of z per x; for the expectation under q(z|x)
+        num_z_samples = 16     # samples of z per x; for the expectation under q(z|x)
 
         if self.scale:
             s = self.scale_data(s)

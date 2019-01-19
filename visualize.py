@@ -139,11 +139,18 @@ def plot_and_save(log_dir, sub_dir='plt'):
 
     history_filename = os.path.join(log_dir, 'history.pkl')
     history = pickle.load(open(history_filename, 'rb'))
-    plot_per_fitting_iteration(history)
-    plt.savefig(os.path.join(save_dir, 'trajectories_per_iteration'))
 
-    plot_previous_states_per_fitting_iteration(history)
-    plt.savefig(os.path.join(save_dir, 'all_states'))
+    if 'point2d' in log_dir:
+        plot_per_fitting_iteration(history)
+        plt.savefig(os.path.join(save_dir, 'trajectories_per_iteration'))
+
+        plot_previous_states_per_fitting_iteration(history)
+        plt.savefig(os.path.join(save_dir, 'all_states'))
+    elif 'half-cheetah' in log_dir:
+        pass
+    else:
+        raise ValueError
+
     make_html(log_dir)
 
     plt.close('all')

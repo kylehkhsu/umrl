@@ -209,16 +209,16 @@ class CNNBase(NNBase):
 
 
 class MLPBase(NNBase):
-    def __init__(self, num_inputs, recurrent=False, hidden_size=64):
+    def __init__(self, num_inputs, recurrent=False, hidden_size=64, init_gain=np.sqrt(2)):
         super(MLPBase, self).__init__(recurrent, num_inputs, hidden_size)
 
         if recurrent:
             num_inputs = hidden_size
 
-        init_ = lambda m: init(m,
-            nn.init.orthogonal_,
-            lambda x: nn.init.constant_(x, 0),
-            np.sqrt(2))
+        init_ = lambda m: init(module=m,
+                               weight_init=nn.init.orthogonal_,
+                               bias_init=lambda x: nn.init.constant_(x, 0),
+                               gain=init_gain)
 
         self.actor = nn.Sequential(
             init_(nn.Linear(num_inputs, hidden_size)),
@@ -252,7 +252,7 @@ class MLPBase(NNBase):
 
 class RL2Base(NNBase):
     def __init__(self, num_obs_dim, recurrent=False, hidden_size=128, num_act_dim=2):
-        recurrent_input_size = hidden_size + 1 + 3  # + reward + flag
+        recurrent_input_size = hidden_size + 1 + 1  # + reward + flag
         super(RL2Base, self).__init__(recurrent, recurrent_input_size, hidden_size)
 
         self.nonlinearity = nn.Tanh()
@@ -269,11 +269,6 @@ class RL2Base(NNBase):
             nn.Tanh()
         )
 
-        self.flag_embedding = nn.Embedding(num_embeddings=3, embedding_dim=3,
-                                           _weight=torch.FloatTensor([[1, 0, 0],
-                                                                      [0, 1, 0],
-                                                                      [0, 0, 1]]))
-        self.flag_embedding.weight.requires_grad = False
         self.critic_linear = init_(nn.Linear(hidden_size, 1))
 
         self.train()
@@ -281,9 +276,7 @@ class RL2Base(NNBase):
     def forward(self, inputs, rnn_hxs, masks):
         obs_raw, obs_act, obs_rew, obs_flag = inputs
         x_emb = self.encoder(torch.cat([obs_raw, obs_act], dim=-1))
-        x_flag = self.flag_embedding(obs_flag.long().squeeze(1))
-        x = torch.cat([x_emb, obs_rew, x_flag], dim=-1)
-        # x = torch.cat([x_emb, obs_rew, obs_flag], dim=-1)
+        x = torch.cat([x_emb, obs_rew, obs_flag], dim=-1)
         if self.is_recurrent:
             x, rnn_hxs = self._forward_gru(x, rnn_hxs, masks)
         return self.critic_linear(x), x, rnn_hxs
