@@ -9,8 +9,9 @@ import doodad as dd
 
 from env_interface import ContextualEnvInterface
 from utils import logger
+from arguments import get_args
+
 from a2c_ppo_acktr import algo
-from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.model import Policy
 from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.utils import get_vec_normalize, update_linear_schedule
@@ -20,87 +21,7 @@ from utils.misc import save_model, calculate_state_entropy
 from utils.looker import Looker
 from subprocess import Popen
 
-# log_dir_root = dd.get_args('log_dir_root')
-
-log_dir_root = './output'
-
 args = get_args()
-
-# objective optimization
-args.cuda = True
-args.algo = 'ppo'
-args.entropy_coef = 0.001
-args.lr = 3e-4
-args.value_loss_coef = 0.1
-args.gamma = 0.99
-args.tau = 0.95
-args.use_gae = True
-args.use_linear_lr_decay = False
-args.cold_start_policy = False
-
-# policy initialization
-args.init_gain = np.sqrt(20)
-
-# environment, reward
-args.interface = 'contextual'
-# args.env_name = 'Point2DWalls-center-v0'
-args.env_name = 'HalfCheetah-v0'
-args.rewarder = 'unsupervised'    # supervised or unsupervised
-args.obs = 'raw'
-
-# specific to args.rewarder == 'unsupervised'
-args.cumulative_reward = False
-args.clusterer = 'vae'  # mog or dp-mog or diayn or vae
-args.max_components = 25    # irrelevant for vae
-args.reward = 's|z'     # s|z or z|s
-args.conditional_coef = 0
-args.rewarder_fit_period = 10
-args.subsample_num = 1024
-args.weight_concentration_prior = 1e5   # specific to dp-mog
-args.subsample_strategy = 'last-random'    # skew or random or last-random
-args.subsample_last_per_fit = 100
-args.subsample_power = -0.01   # specific to skewing
-args.context = 'latent'   # mean or all or latent
-
-# specific to args.clusterer == 'vae'
-args.vae_beta = 0.5
-args.vae_lr = 5e-4
-args.vae_hidden_size = 512
-args.vae_latent_size = 16
-args.vae_layers = 10
-args.vae_plot = True
-args.vae_scale = False
-args.vae_max_fit_epoch = 1000
-args.vae_weights = None
-args.vae_load = False
-args.vae_batch_size = 256
-
-# specific to args.rewarder == 'supervised' or supervised evaluation
-args.dense_coef = 10
-args.success_coef = 10
-args.tasks = 'two'
-args.task_type = 'direction'
-
-# steps, processes
-args.num_mini_batch = 5
-args.num_processes = 5
-args.trial_length = 1
-args.episode_length = 30
-args.trials_per_update = 500
-args.trials_per_process_per_update = args.trials_per_update // args.num_processes
-args.num_steps = args.episode_length * args.trial_length * args.trials_per_process_per_update
-args.num_updates = 50
-
-# logging, saving, visualization
-args.save_period = args.rewarder_fit_period
-args.vis_period = args.rewarder_fit_period
-# args.experiment_name = 'vae/20190118/half-cheetah_h512_l16_layers10_beta0.5_lr5e-4_ig-sqrt20'
-args.experiment_name = 'half-cheetah/20190118/contextual_vae_lambda0_entropy_0.001_P10_N50_ig-sqrt20'
-# args.experiment_name = 'debug/half-cheetah/20190118/init-gain-sqrt20'
-args.log_dir = os.path.join(log_dir_root, args.experiment_name)
-# args.log_dir = './output/debug/point2d/201901114/context_mog'
-args.look = True
-args.plot = True
 
 # set seeds
 torch.manual_seed(args.seed)
@@ -108,9 +29,6 @@ torch.cuda.manual_seed_all(args.seed)
 np.random.seed(args.seed)
 
 assert args.trial_length == 1
-
-args.device = 'cuda:0' if args.cuda else 'cpu'
-
 
 def initialize_policy(envs):
     actor_critic = Policy(envs.obs_shape, envs.action_space,
@@ -256,8 +174,6 @@ def train():
             rewarder_fit_start = time.time()
             envs.fit_rewarder()
             rewarder_fit_time += time.time() - rewarder_fit_start
-            if args.cold_start_policy:
-                actor_critic, agent = initialize_policy(envs)
 
         if (j % args.vis_period == 0 or j == args.num_updates - 1) and args.log_dir != '':
             visualize_start = time.time()

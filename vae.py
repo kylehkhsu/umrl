@@ -192,10 +192,12 @@ class VAE:
         self.beta = lambda t: args.vae_beta
         self.device = args.device
         self.model.to(self.device)
+        self.mean = None
+        self.std = None
 
-    def load(self, iteration, load_from=None):
+    def load(self, iteration, load_from=''):
         self._set_logging(iteration)
-        if load_from:
+        if load_from != '':
             filename = load_from
         else:
             filename = self.filename
@@ -224,6 +226,7 @@ class VAE:
         else:
             raise ValueError
 
+        self._calculate_statistics(trajectories)
         trajectories = self.normalize_data(trajectories)
 
         assert self.episode_length == trajectories.shape[1]
@@ -269,7 +272,12 @@ class VAE:
             dataset_test, shuffle=False, batch_size=batch_size, num_workers=2)
 
         if iteration == 0:
-            num_max_epoch = 1000
+            if 'Point2D' in self.args.env_name:
+                num_max_epoch = 1000
+            elif 'HalfCheetah' in self.args.env_name:
+                num_max_epoch = 10
+            else:
+                raise ValueError
         else:
             num_max_epoch = self.args.vae_max_fit_epoch
 
@@ -434,7 +442,7 @@ class VAE:
             log_likelihood = self.model._log_likelihood(x, mean_x, logvar_x)
             assert log_likelihood.dim() == 2
             assert log_likelihood.shape[1] == self.episode_length
-            log_likelihood = log_likelihood.exp().mean(dim=1).log()     # marginalize out t
+            log_likelihood = log_likelihood.exp().clamp(min=0, max=1).mean(dim=1).log()     # marginalize out t
         return log_likelihood.cpu()
 
     def log_marginal(self, s, traj):
@@ -446,7 +454,7 @@ class VAE:
 
         self.model.eval()
         # (i_process, i_repetition, i_t, i_feature)
-        num_z_samples = 16     # samples of z per x; for the expectation under q(z|x)
+        num_z_samples = self.args.vae_marginal_samples     # samples of z per x; for the expectation under q(z|x)
 
         if self.normalize:
             s = self.normalize_data(s)
@@ -462,7 +470,7 @@ class VAE:
 
             log_likelihood = self.model._log_likelihood(s, mean_x, logvar_x)
             assert log_likelihood.shape[2] == self.episode_length
-            log_likelihood = log_likelihood.exp_().mean(dim=2).log_()
+            log_likelihood = log_likelihood.exp_().clamp(min=0, max=1).mean(dim=2).log_()
 
             kl_divergence = self.model._kl_divergence(mean_z, var_z)
             kl_divergence = kl_divergence[:, :, 0]   # duplicated across time
@@ -490,14 +498,23 @@ class VAE:
     def to(self, device):
         self.model.to(device)
 
+    def _calculate_statistics(self, traj):
+        if self.mean is None and self.std is None:
+            self.mean = traj.mean(dim=0).mean(dim=0)
+            self.std = traj.sub(self.mean).pow(2).sum(dim=0).sum(dim=0).div(traj.shape[0] * traj.shape[1] - 1).sqrt()
+
     def normalize_data(self, x):
         if 'Point2D' in self.args.env_name:
             x = x.div(10)
+        else:
+            x = x.cpu().sub(self.mean).div(self.std)
         return x
 
     def unnormalize_data(self, x):
         if 'Point2D' in self.args.env_name:
             x = x.mul(10)
+        else:
+            x = x.cpu().mul(self.std).add(self.mean)
         return x
 
 
@@ -542,10 +559,14 @@ def validate_vae(args):
     traj_part = traj[:, :25, :]
     state = traj_part[:, -1, :]
 
-    log_marginal = vae.log_marginal(state, traj_part)
+    for i in range(10):
+        print(vae.log_marginal(state, traj_part).exp())
 
-    ipdb.set_trace()
-
+    z, x, mean_x = vae.sample(5)
+    x = vae.unnormalize_data(x)
+    mean_x = vae.unnormalize_data(mean_x)
+    z = z[:, 0, :]
+    print(vae.log_s_given_z(x[:, -1, :], z).exp())
 
 
 if __name__ == '__main__':
@@ -570,6 +591,7 @@ if __name__ == '__main__':
     args.vae_max_fit_epoch = 1000
     args.vae_weights = None
     args.vae_batches = 16
+    args.vae_marginal_samples = 16
     args.log_dir = './output/vae/20190118/traj_debug_beta0.6_lr5e-4_h256_l8_layers4_b8'
 
     args.env_name = 'Point2DWalls-corner-v0'

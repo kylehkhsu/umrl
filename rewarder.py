@@ -28,7 +28,7 @@ class Rewarder:
         self.args = args
 
     @abstractmethod
-    def _calculate_reward(self, task, obs_raw, action, **kwargs):
+    def _calculate_reward(self, task, obs_raw, action, traj, **kwargs):
         pass
 
     @abstractmethod
@@ -54,19 +54,16 @@ class UnsupervisedRewarder(Rewarder):
         self.episode_rewards = []
 
         # context type
-        if self.args.context == 'mean':
-            self.context_shape = obs_raw_shape
-        elif self.args.context == 'all':
-            self.context_shape = (obs_raw_shape[0] * 3,)    # mean and eigenvectors of cov
-        elif self.args.context == 'latent':
-            assert self.args.clusterer == 'vae'
+        if self.args.clusterer == 'vae':
             self.context_shape = (self.args.vae_latent_size,)
+        elif self.args.clusterer == 'mog' or self.args.clusterer == 'dp-mog':
+            self.context_shape = (obs_raw_shape[0] * 3,)
         else:
             raise ValueError
 
         if self.args.clusterer == 'mog':
             self.clusterer = \
-                GaussianMixture(n_components=self.args.max_components,
+                GaussianMixture(n_components=self.args.num_components,
                                 covariance_type='full',
                                 verbose=1,
                                 verbose_interval=100,
@@ -74,7 +71,7 @@ class UnsupervisedRewarder(Rewarder):
                                 n_init=1)
         elif self.args.clusterer == 'dp-mog':
             self.clusterer = \
-                BayesianGaussianMixture(n_components=self.args.max_components,
+                BayesianGaussianMixture(n_components=self.args.num_components,
                                         covariance_type='full',
                                         verbose=1,
                                         verbose_interval=100,
@@ -91,12 +88,12 @@ class UnsupervisedRewarder(Rewarder):
         else:
             raise ValueError
 
-        self.p_z = np.empty(self.args.max_components, dtype=np.float32)
+        self.p_z = np.empty(self.args.num_components, dtype=np.float32)
         self.component_id = np.zeros(self.args.num_processes, dtype=np.int)
 
         self.obs_raw_shape = obs_raw_shape
 
-    def _calculate_reward(self, task_current, obs_raw, action, **kwargs):
+    def _calculate_reward(self, task_current, obs_raw, action, traj, **kwargs):
         reward_info = dict()
 
         if self.fit_counter == 0 and not self.args.vae_load:
@@ -105,15 +102,16 @@ class UnsupervisedRewarder(Rewarder):
             reward_info['lambda_log_s_given_z'] = torch.zeros(self.args.num_processes)
             return reward, reward_info
 
-        if self.args.reward == 's|z':
+        if self.args.reward == 's_given_z':
             if self.args.clusterer == 'vae':
                 if kwargs.get('latent') is not None:
                     z = kwargs['latent']
                 else:
                     z = torch.from_numpy(np.stack(task_current, axis=0).astype(dtype=np.float32))
+                traj = torch.stack(traj, dim=0)
 
                 log_s_given_z = self.clusterer.log_s_given_z(s=obs_raw, z=z)
-                log_marginal = self.clusterer.log_marginal(s=obs_raw)
+                log_marginal = self.clusterer.log_marginal(s=obs_raw, traj=traj)
 
                 log_s_given_z = guard_against_underflow(log_s_given_z)
                 log_marginal = guard_against_underflow(log_marginal)
@@ -159,12 +157,9 @@ class UnsupervisedRewarder(Rewarder):
 
         if self.args.clusterer == 'dp-mog' or self.args.clusterer == 'mog':
 
-            z = np.random.choice(self.args.max_components, size=1, replace=False, p=self.p_z)[0]
+            z = np.random.choice(self.args.num_components, size=1, replace=False, p=self.p_z)[0]
             self.component_id[i_process] = z
-            if self.args.context == 'mean':
-                task = self.clusterer.means_[z]
-            elif self.args.context == 'all':
-                task = np.concatenate([self.clusterer.means_[z], self.evecs[z]])
+            task = np.concatenate([self.clusterer.means_[z], self.evecs[z]])
 
         elif self.args.clusterer == 'vae':
 

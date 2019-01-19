@@ -260,8 +260,8 @@ if __name__ == '__main__':
 #
 #     tasks = sort_episodes_by_task(episodes)
 #
-#     if history.args.max_components:
-#         max_components = history.args.max_components
+#     if history.args.num_components:
+#         max_components = history.args.num_components
 #     else:
 #         max_components = 50
 #

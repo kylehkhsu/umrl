@@ -12,10 +12,9 @@ from utils.misc import Normalizer
 class MultiTaskEnvInterface(ABC):
     def __init__(self, args, mode='train'):
         if mode == 'val':
-            args.cuda = False
             args.num_processes = 1
 
-        if args.cuda and torch.cuda.is_available() and args.cuda_deterministic:
+        if torch.cuda.is_available() and args.cuda_deterministic:
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
 
@@ -31,11 +30,7 @@ class MultiTaskEnvInterface(ABC):
                                   device=self.device,
                                   allow_early_resets=True)
 
-        if args.obs == 'raw':
-            self.obs_raw_shape = self.envs.observation_space.shape
-        else:
-            raise ValueError
-
+        self.obs_raw_shape = self.envs.observation_space.shape
         self.action_space = self.envs.action_space
         self.tasks = []
 
@@ -80,8 +75,8 @@ class MultiTaskEnvInterface(ABC):
     def fit_rewarder(self, **kwargs):
         pass
 
-    def _calculate_reward(self, task, obs_raw, action, **kwargs):
-        return self.rewarder._calculate_reward(task, obs_raw, action, **kwargs)
+    def _calculate_reward(self, task, obs_raw, action, traj, **kwargs):
+        return self.rewarder._calculate_reward(task, obs_raw, action, traj, **kwargs)
 
     def _sample_task_one(self, i_process):
         return self.rewarder._sample_task_one(i_process)
@@ -255,6 +250,7 @@ class ContextualEnvInterface(MultiTaskEnvInterface):
         reward, reward_info = self._calculate_reward(self.task_current,
                                                      obs_raw,
                                                      action,
+                                                     self.trajectory_current,
                                                      latent=self._get_context_tensor(),
                                                      env_info=info_raw)
         reward_time = time.time() - reward_start
