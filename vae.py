@@ -275,7 +275,7 @@ class VAE:
             if 'Point2D' in self.args.env_name:
                 num_max_epoch = 1000
             elif 'HalfCheetah' in self.args.env_name:
-                num_max_epoch = 10
+                num_max_epoch = 100
             else:
                 raise ValueError
         else:

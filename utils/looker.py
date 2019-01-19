@@ -33,8 +33,8 @@ class Looker:
         self.sub_dir = sub_dir
         os.makedirs(os.path.join(self.args.log_dir, self.sub_dir), exist_ok=True)
         from pyvirtualdisplay import Display
-        display = Display(visible=False, size=(256, 256))
-        display.start()
+        self.display = Display(visible=False, size=(256, 256))
+        self.display.start()
         _ = self.envs.envs.get_images()
 
     def look(self, iteration=-1):
@@ -96,6 +96,7 @@ class Looker:
             self.look(iteration)
 
     def __del__(self):
+        self.display.stop()
         self.envs.envs.close()
 
     def make_html(self, root_dir, sub_dir='vis', extension='.mp4'):
