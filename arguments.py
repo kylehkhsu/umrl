@@ -120,7 +120,7 @@ def get_args():
     parser.add_argument('--vis-period', type=int, default=10,
                         help='vis period, one log per n updates')
     parser.add_argument('--experiment-name', type=str,
-                        default=f"{now.year:04d}{now.month:02d}{now.day:02d}/"
+                        default=f"{now.year:04d}{now.month:02d}{now.day:02d}-"
                                 f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}:{now.microsecond:06d}",
                         help='experiment name')
     parser.add_argument('--log_dir_root', type=str, default='./output')

@@ -24,7 +24,7 @@ python -m ipdb -c continue main_contextual_cheetah.py \
     --vae-beta 0.5 \
     --vae-lr 5e-4 \
     --vae-hidden-size 256 \
-    --vae-latent-size 4 \
+    --vae-latent-size 8 \
     --vae-layers 5 \
     --vae-plot \
     --vae-normalize \
@@ -40,8 +40,7 @@ python -m ipdb -c continue main_contextual_cheetah.py \
     --num-updates 200 \
     --save-period 10 \
     --vis-period 10 \
-    --log_dir_root ./output/half-cheetah \
-    --experiment-name 20190119/include_x_pos_hidden256 \
+    --log_dir_root ./output/half-cheetah/exp_001 \
     --look \
     --plot
 
