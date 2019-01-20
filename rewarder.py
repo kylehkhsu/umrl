@@ -280,7 +280,8 @@ class SupervisedRewarder(Rewarder):
             reward = self.args.dense_coef * dense_reward + self.args.success_coef * success_reward
         elif 'HalfCheetah' in self.args.env_name:
             velocity = torch.FloatTensor([env_info[i]['velocity'] for i in range(self.args.num_processes)]).unsqueeze(1)
-            reward_ctrl = - 0.1 * (action.cpu() ** 2).sum(dim=-1).unsqueeze(1)
+            # reward_ctrl = - 0.1 * (action.cpu() ** 2).sum(dim=-1).unsqueeze(1)
+            reward_ctrl = 0
 
             if self.args.task_type == 'goal':
                 raise NotImplementedError
@@ -299,9 +300,7 @@ class SupervisedRewarder(Rewarder):
         return reward, reward_info
 
     def _sample_task_one(self, i_process):
-        # rand = 2 * (np.random.random_sample((2,)) - 0.5)    # \in [-1, 1]
-        # goal = self.envs.observation_space.spaces['state_observation'].sample()
-        # goal = np.array([10, 10])
+
         goal = None
 
         if self.args.env_name == 'Point2DWalls-center-v0':
