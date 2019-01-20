@@ -2,14 +2,15 @@
 python -m ipdb -c continue main_contextual_cheetah.py \
     --algo ppo \
     --lr 3e-4 \
-    --entropy-coef 0 \
+    --entropy-coef 0.001 \
     --value-loss-coef 0.5 \
     --ppo-epoch 10 \
     --num-mini-batch 32 \
     --gamma 0.99 \
     --tau 0.95 \
     --use-gae \
-    --init-gain 4 \
+    --init-gain 2 \
+    --policy-hidden-size 256 \
     --env-name HalfCheetah-v0 \
     --interface contextual \
     --rewarder unsupervised \
@@ -23,7 +24,7 @@ python -m ipdb -c continue main_contextual_cheetah.py \
     --vae-beta 0.5 \
     --vae-lr 5e-4 \
     --vae-hidden-size 256 \
-    --vae-latent-size 8 \
+    --vae-latent-size 4 \
     --vae-layers 5 \
     --vae-plot \
     --vae-normalize \
@@ -36,10 +37,11 @@ python -m ipdb -c continue main_contextual_cheetah.py \
     --trial-length 1 \
     --episode-length 50 \
     --trials-per-update 500 \
-    --num-updates 100 \
+    --num-updates 200 \
     --save-period 10 \
     --vis-period 10 \
-    --log_dir_root ./output/debug/half-cheetah \
+    --log_dir_root ./output/half-cheetah \
+    --experiment-name 20190119/include_x_pos_hidden256 \
     --look \
     --plot
 

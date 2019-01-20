@@ -39,9 +39,10 @@ def get_args():
     parser.add_argument('--clip-param', type=float, default=0.2,
                         help='ppo clip parameter (default: 0.2)')
 
-    # policy initialization
+    # policy
     parser.add_argument('--init-gain', type=float, default=np.sqrt(2),
                         help='gain for orthogonal weight matrix initialization')
+    parser.add_argument('--policy-hidden-size', type=int, default=64)
 
     # environment, reward
     parser.add_argument('--env-name', default='PongNoFrameskip-v4',
@@ -119,8 +120,8 @@ def get_args():
     parser.add_argument('--vis-period', type=int, default=10,
                         help='vis period, one log per n updates')
     parser.add_argument('--experiment-name', type=str,
-                        default=f"{now.year}{now.month:02d}{now.day}/"
-                                f"{now.hour:02d}:{now.minute}:{now.second}:{now.microsecond:06d}",
+                        default=f"{now.year:04d}{now.month:02d}{now.day:02d}/"
+                                f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}:{now.microsecond:06d}",
                         help='experiment name')
     parser.add_argument('--log_dir_root', type=str, default='./output')
     parser.add_argument('--look', default=False, action='store_true',
