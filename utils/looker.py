@@ -32,10 +32,7 @@ class Looker:
         self.tasks = self.envs.rewarder.get_assess_tasks()
         self.sub_dir = sub_dir
         os.makedirs(os.path.join(self.args.log_dir, self.sub_dir), exist_ok=True)
-        from pyvirtualdisplay import Display
-        self.display = Display(visible=False, size=(256, 256))
-        self.display.start()
-        _ = self.envs.envs.get_images()
+
 
     def look(self, iteration=-1):
         # actor_critic, obs_rms = torch.load(os.path.join(self.args.log_dir, self.args.env_name + ".pt"))
@@ -95,10 +92,6 @@ class Looker:
         for iteration in sorted(iterations, reverse=True):
             self.look(iteration)
 
-    def __del__(self):
-        self.display.stop()
-        self.envs.envs.close()
-
     def make_html(self, root_dir, sub_dir='vis', extension='.mp4'):
         contents = os.listdir(os.path.join(root_dir, sub_dir))
         regexp = re.compile('iteration_*(\d+)-*(task_*(?s).*){}'.format(extension), flags=re.ASCII)
@@ -128,9 +121,18 @@ class Looker:
         tw = TableWriter(table, outputdir=os.path.join(root_dir, sub_dir), rowsPerPage=5)
         tw.write()
 
+def look_in_sub_dirs(dir):
+    contents = os.listdir(dir)
+    for content in contents:
+        try:
+            looker = Looker(log_dir=os.path.join(dir, content))
+            looker.look_all()
+        except:
+            pass
+
 
 if __name__ == '__main__':
-    # looker = Looker(log_dir='./output/debug/half-cheetah/20190106/rl2_tasks-direction-two_run4')
-    looker = Looker(log_dir='./output/debug/point2d/20190107/context_tasks-four_run2')
+    looker = Looker(log_dir='/home/kylehsu/experiments/umrl/output/half-cheetah/20190119/12:38:10:136024')
     looker.look_all()
     # looker.look(iteration=999)
+    # look_in_sub_dirs('/home/kylehsu/experiments/umrl/output/half-cheetah/20190119')
