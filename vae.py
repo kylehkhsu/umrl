@@ -259,7 +259,6 @@ class VAE:
             filter(lambda x: x.requires_grad, self.model.parameters()),
             lr=self.args.vae_lr,
         )
-        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.normalize else 0.02, patience=300)
 
         dataset_train, dataset_test = self.preprocess_trajectories(trajectories)
 
@@ -281,6 +280,8 @@ class VAE:
         else:
             num_max_epoch = self.args.vae_max_fit_epoch
 
+        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.normalize else 0.02, patience=num_max_epoch // 5)
+
         t = tqdm(range(num_max_epoch))
         for i_epoch in t:
             loss_train = self._train(loader_train, i_epoch)
@@ -292,7 +293,7 @@ class VAE:
                 # print('epoch: {}\tloss: {}'.format(i_epoch, losses.avg))
                 t.write('epoch: {}\ttrain loss: {}\ttest_loss: {}'.format(i_epoch, loss_train, loss_test))
 
-            if i_epoch > 300:
+            if i_epoch > num_max_epoch // 10:
                 if early_stopping.step(loss_train):     # doesn't start tracking until epoch 300
                     t.close()
                     break
