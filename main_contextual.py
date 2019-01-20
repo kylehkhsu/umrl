@@ -15,8 +15,8 @@ from a2c_ppo_acktr import algo
 from a2c_ppo_acktr.model import Policy
 from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.utils import get_vec_normalize, update_linear_schedule
-from multiworld.envs.pygame.point2d import Point2DEnv, Point2DTrajectoryEnv
-from multiworld.envs.mujoco.classic_mujoco.half_cheetah import HalfCheetahEnv
+import multiworld.envs.pygame
+import multiworld.envs.mujoco
 from utils.misc import save_model, calculate_state_entropy
 from utils.looker import Looker
 from subprocess import Popen
