@@ -56,7 +56,8 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
 
     def _get_env_obs(self):
         return np.concatenate([
-            self.sim.data.qpos.flat[1:],
+            # self.sim.data.qpos.flat[1:],
+            self.sim.data.qpos.flat,
             self.sim.data.qvel.flat,
         ])
 
