@@ -388,24 +388,24 @@ class VAE:
                 time = x_plot[:, :, -1].reshape([-1, 1])
 
                 i_row = 0
-                rootz = x_plot[:, :, 0].reshape([-1, 1])
-                bthigh = x_plot[:, :, 2].reshape([-1, 1])
-                sc = axes[i_row, i_col].scatter(rootz, bthigh, c=time, s=1**2)
+                rootx = x_plot[:, :, 0].reshape([-1, 1])
+                rootz = x_plot[:, :, 1].reshape([-1, 1])
+                sc = axes[i_row, i_col].scatter(rootx, rootz, c=time, s=1**2)
                 # plt.colorbar(sc, ax=axes[i_row, i_col])
-                axes[i_row, i_col].set_xlabel('rootz [m]')
-                axes[i_row, i_col].set_ylabel('bthigh [rad]')
+                axes[i_row, i_col].set_xlabel('rootx [m]')
+                axes[i_row, i_col].set_ylabel('rootz [m]')
 
                 i_row = 1
-                rootx_vel = x_plot[:, :, 8].reshape([-1, 1])
-                rootz_vel = x_plot[:, :, 9].reshape([-1, 1])
+                rootx_vel = x_plot[:, :, 9].reshape([-1, 1])
+                rootz_vel = x_plot[:, :, 10].reshape([-1, 1])
                 sc = axes[i_row, i_col].scatter(rootx_vel, rootz_vel, c=time, s=1**2)
                 # plt.colorbar(sc, ax=axes[i_row, i_col])
                 axes[i_row, i_col].set_xlabel('rootx [m/s]')
                 axes[i_row, i_col].set_ylabel('rootz [m/s]')
 
                 i_row = 2
-                rooty_avel = x_plot[:, :, 10].reshape([-1, 1])
-                bthigh_avel = x_plot[:, :, 11].reshape([-1, 1])
+                rooty_avel = x_plot[:, :, 11].reshape([-1, 1])
+                bthigh_avel = x_plot[:, :, 12].reshape([-1, 1])
                 sc = axes[i_row, i_col].scatter(rooty_avel, bthigh_avel, c=time, s=1**2)
                 # plt.colorbar(sc, ax=axes[i_row, i_col])
                 axes[i_row, i_col].set_xlabel('rooty [rad/s]')

@@ -33,6 +33,7 @@ assert args.trial_length == 1
 def initialize_policy(envs):
     actor_critic = Policy(envs.obs_shape, envs.action_space,
                           base_kwargs=dict(recurrent=args.recurrent_policy,
+                                           hidden_size=args.policy_hidden_size,
                                            init_gain=args.init_gain))
     actor_critic.to(args.device)
     agent = algo.PPO(actor_critic, args.clip_param, args.ppo_epoch, args.num_mini_batch,

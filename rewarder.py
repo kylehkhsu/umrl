@@ -284,21 +284,12 @@ class SupervisedRewarder(Rewarder):
 
             if self.args.task_type == 'goal':
                 raise NotImplementedError
-                # goal = torch.Tensor(task)
-                # vel = obs_raw[:, 8].unsqueeze(1)
-                # assert goal.shape == vel.shape
-                # distance = torch.norm(goal - vel.cpu(), dim=-1)
-                # success_reward = (distance < 1).float()
-                # squared_distance = distance ** 2
-                # dense_reward = -squared_distance
-                # reward = self.args.dense_coef * dense_reward + \
-                #          self.args.success_coef * success_reward + reward_ctrl
+
             elif self.args.task_type == 'direction':
                 direction = torch.Tensor(task)[:, 0:1] == 1
                 direction = direction.float()
                 direction[direction == 0] = -1
                 assert torch.all((direction == 1) + (direction == -1))
-                # vel = obs_raw[:, 8].unsqueeze(1).cpu()
                 dense_reward = direction * velocity.cpu()
                 reward = self.args.dense_coef * dense_reward + reward_ctrl
                 reward = reward.squeeze(1)
