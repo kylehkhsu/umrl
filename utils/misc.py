@@ -46,7 +46,11 @@ def calculate_state_entropy(args, trajectories):
         p_s = np.histogramdd(data, bins=bins, range=bounds, density=True)[0]
         H_s = -np.sum(p_s * np.ma.log(p_s))
     elif 'HalfCheetah' in args.env_name:
-        H_s = 0
+        bins = 1000
+        bounds = (np.array([-30, 30]), np.array([-5, 5]))
+        data = torch.cat(trajectories, dim=0).numpy()[:, :2]
+        p_s = np.histogramdd(data, bins=bins, range=bounds, density=True)[0]
+        H_s = -np.sum(p_s * np.ma.log(p_s))
     else:
         raise ValueError
     return H_s
