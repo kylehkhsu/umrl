@@ -20,6 +20,14 @@ def register_custom_envs():
     """
 
     register(
+        id='Ant-v0',
+        entry_point='multiworld.envs.mujoco.classic_mujoco.ant:AntEnv',
+        kwargs={
+
+        }
+    )
+
+    register(
         id='HalfCheetah-v0',
         entry_point='multiworld.envs.mujoco.classic_mujoco.half_cheetah:HalfCheetahEnv',
         kwargs={

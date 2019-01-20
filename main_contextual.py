@@ -9,8 +9,9 @@ import doodad as dd
 
 from env_interface import ContextualEnvInterface
 from utils import logger
+from arguments import get_args
+
 from a2c_ppo_acktr import algo
-from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.model import Policy
 from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.utils import get_vec_normalize, update_linear_schedule
@@ -20,79 +21,7 @@ from utils.misc import save_model, calculate_state_entropy
 from utils.looker import Looker
 from subprocess import Popen
 
-# log_dir_root = dd.get_args('log_dir_root')
-
-log_dir_root = '~/store/umrl/output'
-
 args = get_args()
-
-# objective optimization
-args.cuda = True
-args.algo = 'ppo'
-args.entropy_coef = 0.03
-args.lr = 3e-4
-args.value_loss_coef = 0.1
-args.gamma = 0.99
-args.tau = 0.95
-args.use_gae = True
-args.use_linear_lr_decay = False
-args.cold_start_policy = False
-
-# environment, reward
-args.interface = 'contextual'
-# args.env_name = 'Point2DWalls-center-v0'
-args.env_name = 'Point2DWalls-corner-v0'
-args.rewarder = 'unsupervised'    # supervised or unsupervised
-args.obs = 'raw'
-
-# specific to args.rewarder == 'unsupervised'
-args.cumulative_reward = False
-args.clusterer = 'vae'  # mog or dp-mog or diayn or vae
-args.max_components = 25    # irrelevant for vae
-args.reward = 's|z'     # s|z or z|s
-args.conditional_coef = 0.8
-args.rewarder_fit_period = 25
-args.subsample_num = 2048
-args.weight_concentration_prior = 1e5   # specific to dp-mog
-args.subsample_strategy = 'last-random'    # skew or random or last-random
-args.subsample_last_per_fit = 300
-args.subsample_power = -0.01   # specific to skewing
-args.context = 'latent'   # mean or all or latent
-
-# specific to args.clusterer == 'vae'
-args.vae_beta = 0.5
-args.vae_lr = 5e-4
-args.vae_hidden_size = 256
-args.vae_latent_size = 8
-args.vae_plot = True
-args.vae_scale = True
-args.vae_max_fit_epoch = 1000
-
-# specific to args.rewarder == 'supervised' or supervised evaluation
-args.dense_coef = 1
-args.success_coef = 10
-args.tasks = 'single'
-args.task_type = 'goal'
-
-# steps, processes
-args.num_mini_batch = 5
-args.num_processes = 5
-args.trial_length = 1
-args.episode_length = 30
-args.trials_per_update = 100
-args.trials_per_process_per_update = args.trials_per_update // args.num_processes
-args.num_steps = args.episode_length * args.trial_length * args.trials_per_process_per_update
-args.num_updates = 0
-
-# logging, saving, visualization
-args.save_period = args.rewarder_fit_period
-args.vis_period = args.rewarder_fit_period
-args.experiment_name = 'point2d/20190115/context_vae-warm_policy-warm_lambda0.8_P25_N1'
-# args.experiment_name = 'test'
-args.log_dir = os.path.join(log_dir_root, args.experiment_name)
-# args.log_dir = './output/debug/point2d/201901114/context_mog'
-args.look = False
-args.plot = True
 
 # set seeds
 torch.manual_seed(args.seed)
@@ -101,12 +30,11 @@ np.random.seed(args.seed)
 
 assert args.trial_length == 1
 
-args.device = 'cuda:0' if args.cuda else 'cpu'
-
-
 def initialize_policy(envs):
     actor_critic = Policy(envs.obs_shape, envs.action_space,
-                          base_kwargs={'recurrent': args.recurrent_policy})
+                          base_kwargs=dict(recurrent=args.recurrent_policy,
+                                           hidden_size=args.policy_hidden_size,
+                                           init_gain=args.init_gain))
     actor_critic.to(args.device)
     agent = algo.PPO(actor_critic, args.clip_param, args.ppo_epoch, args.num_mini_batch,
                      args.value_loss_coef, args.entropy_coef, lr=args.lr,
@@ -149,8 +77,6 @@ def train():
         rollouts.obs[0].copy_(obs)
 
     for j in range(args.num_updates):
-        if args.clusterer == 'vae':
-            envs.rewarder.clusterer.to(args.device)
 
         obs = envs.reset()  # have to reset here to use updated rewarder to sample tasks
         copy_obs_into_beginning_of_storage(obs)
@@ -180,17 +106,15 @@ def train():
             step_time_total += time.time() - step_total_start
             step_time_env += info['step_time_env']
             step_time_rewarder += info['reward_time']
-            log_marginal += info['log_marginal'].sum().item()
-            lambda_log_s_given_z += info['lambda_log_s_given_z'].sum().item()
+            if args.rewarder == 'unsupervised' and args.clusterer == 'vae':
+                log_marginal += info['log_marginal'].sum().item()
+                lambda_log_s_given_z += info['lambda_log_s_given_z'].sum().item()
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
             rollouts.insert(obs, recurrent_hidden_states, action, action_log_prob, value, reward, masks)
 
         assert all(done)
-
-        if args.clusterer == 'vae':
-            envs.rewarder.clusterer.to(torch.device('cpu'))
 
         # policy update
         with torch.no_grad():
@@ -239,8 +163,9 @@ def train():
         logger.logkv('step_time_total', step_time_total)
         logger.logkv('visualize_time', visualize_time)
         logger.logkv('rewarder_fit_time', rewarder_fit_time)
-        logger.logkv('log_marginal_avg', log_marginal_avg)
-        logger.logkv('lambda_log_s_given_z_avg', lambda_log_s_given_z_avg)
+        if args.rewarder == 'unsupervised' and args.clusterer == 'vae':
+            logger.logkv('log_marginal_avg', log_marginal_avg)
+            logger.logkv('lambda_log_s_given_z_avg', lambda_log_s_given_z_avg)
         logger.dumpkvs()
 
         if (j % args.save_period == 0 or j == args.num_updates - 1) and args.log_dir != '':
@@ -250,8 +175,6 @@ def train():
             rewarder_fit_start = time.time()
             envs.fit_rewarder()
             rewarder_fit_time += time.time() - rewarder_fit_start
-            if args.cold_start_policy:
-                actor_critic, agent = initialize_policy(envs)
 
         if (j % args.vis_period == 0 or j == args.num_updates - 1) and args.log_dir != '':
             visualize_start = time.time()
