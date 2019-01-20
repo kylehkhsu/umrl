@@ -274,7 +274,7 @@ class VAE:
         if iteration == 0:
             if 'Point2D' in self.args.env_name:
                 num_max_epoch = 1000
-            elif 'HalfCheetah' in self.args.env_name:
+            elif 'HalfCheetah' in self.args.env_name or 'Ant' in self.args.env_name:
                 num_max_epoch = self.args.vae_max_fit_epoch
             else:
                 raise ValueError
@@ -411,11 +411,44 @@ class VAE:
                 axes[i_row, i_col].set_xlabel('rooty [rad/s]')
                 axes[i_row, i_col].set_ylabel('bthigh [rad/s]')
 
+        def plot_ant():
+            fig, axes = plt.subplots(nrows=3, ncols=4,
+                                     sharex='row', sharey='row', figsize=[20, 15])
+            for i_col, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction', 'sample mean'])):
+                axes[0, i_col].set_title(title)
+
+                if self.normalize:
+                    x_plot = self.unnormalize_data(x_plot)
+                x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
+                x_plot = add_time(x_plot.cpu().numpy())
+
+                bodycom_x = x_plot[:, :, -4].reshape([-1, 1])
+                bodycom_y = x_plot[:, :, -3].reshape([-1, 1])
+                bodycom_z = x_plot[:, :, -2].reshape([-1, 1])
+                time = x_plot[:, :, -1].reshape([-1, 1])
+
+                i_row = 0
+                sc = axes[i_row, i_col].scatter(bodycom_x, bodycom_y, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('bodycom_x [m]')
+                axes[i_row, i_col].set_ylabel('bodycom_y [m]')
+
+                i_row = 1
+                sc = axes[i_row, i_col].scatter(bodycom_x, bodycom_z, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('bodycom_x [m]')
+                axes[i_row, i_col].set_ylabel('bodycom_z [m]')
+
+                i_row = 2
+                sc = axes[i_row, i_col].scatter(bodycom_y, bodycom_z, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('bodycom_y [m]')
+                axes[i_row, i_col].set_ylabel('bodycom_z [m]')
+
         if self.args.vae_plot:
             if 'Point2D' in self.args.env_name:
                 plot_point()
             elif 'HalfCheetah' in self.args.env_name:
                 plot_cheetah()
+            elif 'Ant' in self.args.env_name:
+                plot_ant()
             plt.savefig(os.path.join(self.plot_dir, 'epoch_{}.png'.format(i_epoch)))
             plt.close('all')
 

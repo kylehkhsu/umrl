@@ -21,7 +21,14 @@ from pyhtmlwriter.TableWriter import TableWriter
 
 class Looker:
     def __init__(self, log_dir, sub_dir='vis'):
+
         self.args = Map(json.load(open(os.path.join(log_dir, 'params.json'), 'r')))
+
+        # set seeds
+        torch.manual_seed(self.args.seed)
+        torch.cuda.manual_seed_all(self.args.seed)
+        np.random.seed(self.args.seed)
+
         if self.args.interface is None:
             print('args.interface not set, default rl2')
             self.args.interface = 'rl2'
@@ -118,21 +125,30 @@ class Looker:
                 row.addElement(e)
 
             table.addRow(row)
-        tw = TableWriter(table, outputdir=os.path.join(root_dir, sub_dir), rowsPerPage=5)
+        tw = TableWriter(table, outputdir=os.path.join(root_dir, sub_dir), rowsPerPage=3)
         tw.write()
 
 def look_in_sub_dirs(dir):
     contents = os.listdir(dir)
     for content in contents:
-        try:
-            looker = Looker(log_dir=os.path.join(dir, content))
-            looker.look_all()
-        except:
-            pass
+        looker = Looker(log_dir=os.path.join(dir, content))
+        looker.look_all()
 
 
 if __name__ == '__main__':
-    looker = Looker(log_dir='/home/kylehsu/experiments/umrl/output/half-cheetah/20190119/12:38:10:136024')
-    looker.look_all()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--log-dir', default='')
+    parser.add_argument('--log-dir-root', default='')
+    args = parser.parse_args()
+    if args.log_dir != '':
+        looker = Looker(log_dir='/home/kylehsu/experiments/umrl/output/half-cheetah/20190119/include_x_pos_hidden256')
+        looker.look_all()
+    elif args.log_dir_root != '':
+        look_in_sub_dirs(dir=args.log_dir_root)
+
+
+
+
     # looker.look(iteration=999)
     # look_in_sub_dirs('/home/kylehsu/experiments/umrl/output/half-cheetah/20190119')
