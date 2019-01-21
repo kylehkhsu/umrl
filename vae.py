@@ -272,7 +272,12 @@ class VAE:
 
         num_max_epoch = self.args.vae_max_fit_epoch
 
-        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.normalize else 0.02, patience=num_max_epoch // 10)
+        if 'Point2D' in self.args.env_name:
+            min_delta = 0.05
+        else:
+            min_delta = 0.005   # TODO: tune
+
+        early_stopping = EarlyStopping(mode='min', min_delta=min_delta, patience=num_max_epoch // 10)
 
         t = tqdm(range(num_max_epoch))
         for i_epoch in t:
