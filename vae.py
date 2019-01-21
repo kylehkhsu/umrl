@@ -186,7 +186,7 @@ class VAE:
             lr=self.args.vae_lr,
         )
 
-        self.normalize = self.args.vae_normalize
+        self.normalize_strategy = self.args.vae_normalize_strategy
 
         # self.beta = lambda t: min(1, args.vae_beta + 1e-3 * t)
         self.beta = lambda t: args.vae_beta
@@ -361,8 +361,7 @@ class VAE:
                 setup_axes(ax, limit=10, walls=True)
                 ax.set_title(title)
 
-                if self.normalize:
-                    x_plot = self.unnormalize_data(x_plot)
+                x_plot = self.unnormalize_data(x_plot)
 
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
 
@@ -378,8 +377,7 @@ class VAE:
             for i_col, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction', 'sample mean'])):
                 axes[0, i_col].set_title(title)
 
-                if self.normalize:
-                    x_plot = self.unnormalize_data(x_plot)
+                x_plot = self.unnormalize_data(x_plot)
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
                 x_plot = add_time(x_plot.cpu().numpy())
 
@@ -415,8 +413,7 @@ class VAE:
             for i_col, (x_plot, title) in enumerate(zip([x_orig, x_sample, x_recon, x_sample_mean], ['raw', 'sample', 'reconstruction', 'sample mean'])):
                 axes[0, i_col].set_title(title)
 
-                if self.normalize:
-                    x_plot = self.unnormalize_data(x_plot)
+                x_plot = self.unnormalize_data(x_plot)
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
                 x_plot = add_time(x_plot.cpu().numpy())
 
@@ -458,8 +455,7 @@ class VAE:
         assert s.shape[1] == self.model.input_size
         assert z.shape[1] == self.model.latent_size
 
-        if self.normalize:
-            s = self.normalize_data(s)
+        s = self.normalize_data(s)
 
         self.model.eval()
 
@@ -487,9 +483,8 @@ class VAE:
         # (i_process, i_repetition, i_t, i_feature)
         num_z_samples = self.args.vae_marginal_samples     # samples of z per x; for the expectation under q(z|x)
 
-        if self.normalize:
-            s = self.normalize_data(s)
-            traj = self.normalize_data(traj)
+        s = self.normalize_data(s)
+        traj = self.normalize_data(traj)
 
         with torch.no_grad():
             traj = traj.to(self.device).reshape(traj.shape[0], 1, traj.shape[1], traj.shape[2])
@@ -530,9 +525,24 @@ class VAE:
         self.model.to(device)
 
     def _calculate_statistics(self, traj):
-        if self.mean is None and self.std is None:
+        if self.args.vae_normalize_strategy == 'none':
+            self.mean = torch.zeros(traj.shape[-1])
+            self.std = torch.ones(traj.shape[-1])
+        elif self.args.vae_normalize_strategy == 'first':
+            if self.mean is None and self.std is None:
+                self.mean = traj.mean(dim=0).mean(dim=0)
+                self.std = traj.sub(self.mean).pow(2).sum(dim=0).sum(dim=0).div(traj.shape[0] * traj.shape[1] - 1).sqrt()
+        elif self.args.vae_normalize_strategy == 'adaptive':
             self.mean = traj.mean(dim=0).mean(dim=0)
             self.std = traj.sub(self.mean).pow(2).sum(dim=0).sum(dim=0).div(traj.shape[0] * traj.shape[1] - 1).sqrt()
+        elif self.args.vae_normalize_strategy == 'fixed':
+            if 'Point2D' in self.args.env_name:
+                self.mean = torch.zeros(traj.shape[-1])
+                self.std = 10 * torch.ones(traj.shape[-1])
+            else:
+                raise ValueError
+        else:
+            raise ValueError
 
     def normalize_data(self, x):
         # if 'Point2D' in self.args.env_name:
