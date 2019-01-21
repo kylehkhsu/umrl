@@ -73,13 +73,16 @@ def val(args, sampler_val, policy, baseline, batch):
         task_episodes = []
         sampler_val.reset_task(task)
         for i_episode in range(args.num_adapt_val + 1):
-            episodes = sampler_val.sample(policy, gamma=args.gamma, device=args.device)
+            if i_episode == 0:
+                params = None
+            episodes = sampler_val.sample(policy, params=params, gamma=args.gamma, device=args.device)
+
+            # compute inner loss
             baseline.fit(episodes)
             values = baseline(episodes)
             advantages = episodes.gae(values, tau=args.tau)
             advantages = weighted_normalize(advantages, weights=episodes.mask)
-            if i_episode == 0:
-                params = None
+
             pi = policy(episodes.observations, params=params)
             log_probs = pi.log_prob(episodes.actions)
             if log_probs.dim() > 2:
@@ -88,7 +91,8 @@ def val(args, sampler_val, policy, baseline, batch):
             loss = -weighted_mean(log_probs * advantages, dim=0,
                                   weights=episodes.mask) - args.entropy_coef_val * entropy
             fast_lr = args.fast_lr if i_episode == 0 else args.fast_lr_val_after_one
-            params = policy.update_params(loss, step_size=fast_lr, first_order=True)
+            if i_episode <= args.num_adapt_val:
+                params = policy.update_params(loss, step_size=fast_lr, first_order=True)
             task_episodes.append(episodes)
         task_to_episodes[str(task)] = task_episodes
 
@@ -148,7 +152,8 @@ def main(args):
         if batch % args.rewarder_fit_period == 0:
             sampler.fit_rewarder(logger)
 
-        sampler.log(logger)
+        if args.rewarder == 'unsupervised':
+            sampler.log_unsupervised(logger)
         log_main(logger, episodes, batch, args, start_time, metalearner)
 
         if batch % args.save_period == 0 or batch == args.num_batches - 1:
