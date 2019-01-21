@@ -104,6 +104,10 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
         return self._get_obs()
 
     def viewer_setup(self):
+        # track
+        self.viewer.cam.fixedcamid = 0
+        self.viewer.cam.type = 2
+
         self.viewer.cam.distance = self.model.stat.extent * 0.5
 
     def reset(self):

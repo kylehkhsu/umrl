@@ -151,6 +151,8 @@ class UnsupervisedRewarder(Rewarder):
             tasks = np.random.randn(20, self.args.vae_latent_size)
         return tasks
 
+
+
     def _sample_task_one(self, i_process):
         if self.fit_counter == 0 and self.args.clusterer != 'vae':
             return None

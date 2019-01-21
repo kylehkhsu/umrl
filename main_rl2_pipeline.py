@@ -44,8 +44,8 @@ args.obs = 'raw'
 # specific to args.rewarder == 'unsupervised'
 args.cumulative_reward = False
 args.clusterer = 'vae'  # mog or dp-mog or diayn or vae
-args.max_components = 25    # irrelevant for vae
-args.reward = 's|z'     # s|z or z|s
+args.num_components = 25    # irrelevant for vae
+args.reward = 's_given_z'     # s_given_z or z_given_s
 args.conditional_coef = 0.8
 args.rewarder_fit_period = 25
 args.subsample_num = 2048

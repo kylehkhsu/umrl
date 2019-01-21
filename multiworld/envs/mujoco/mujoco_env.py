@@ -132,9 +132,7 @@ class MujocoEnv(gym.Env):
             self.viewer = mujoco_py.MjRenderContextOffscreen(self.sim, 0)
             # self.viewer = mujoco_py.MjViewer(self.sim)
 
-            # track
-            self.viewer.cam.fixedcamid = 0
-            self.viewer.cam.type = 2
+
 
             self.viewer_setup()
         return self.viewer

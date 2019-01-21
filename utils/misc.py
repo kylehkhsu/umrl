@@ -7,6 +7,13 @@ from a2c_ppo_acktr.utils import get_vec_normalize
 import numpy as np
 
 
+def save_model_maml(args, policy, iteration, sub_dir='ckpt'):
+    os.makedirs(os.path.join(args.log_dir, sub_dir), exist_ok=True)
+    if 'cuda' in args.device:
+        policy = copy.deepcopy(policy).cpu()    # apparently a really ugly way to save to CPU
+    torch.save(policy, os.path.join(args.log_dir, sub_dir, 'iteration_{}.pt'.format(iteration)))
+
+
 def save_model(args, policy, envs, iteration, sub_dir='ckpt'):
     os.makedirs(os.path.join(args.log_dir, sub_dir), exist_ok=True)
     if 'cuda' in args.device:

@@ -124,7 +124,7 @@ class DeepClusterer:
     def __init__(self, args, clusterer):
         self.args = args
         self.clusterer = clusterer
-        self.model = MLPNet(args.max_components)
+        self.model = MLPNet(args.num_components)
 
         self.pca = None
 
@@ -207,7 +207,7 @@ class DeepClusterer:
                 )
 
                 # weigh loss according to inverse-frequency of cluster
-                weight = torch.zeros(self.args.max_components, dtype=torch.float32)
+                weight = torch.zeros(self.args.num_components, dtype=torch.float32)
                 unique_labels, counts = np.unique(labels.numpy(), return_counts=True)
                 inverse_counts = 1 / counts
                 p_label = inverse_counts / np.sum(inverse_counts)
@@ -306,7 +306,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     args = parser.parse_args()
-    args.max_components = 20
+    args.num_components = 20
     args.episode_length = 100
     args.seed = 1
     # args.log_dir = './output/deepcluster/cluster-kmeans_init-normal_layers5_h4_f2'
@@ -318,13 +318,13 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
 
     from mixture.models import BayesianGaussianMixture, GaussianMixture, KMeans
-    # clusterer = GaussianMixture(n_components=args.max_components,
+    # clusterer = GaussianMixture(n_components=args.num_components,
     #                             covariance_type='full',
     #                             verbose=1,
     #                             verbose_interval=100,
     #                             max_iter=1000,
     #                             n_init=1)
-    clusterer = KMeans(n_clusters=args.max_components,
+    clusterer = KMeans(n_clusters=args.num_components,
                        n_init=1,
                        max_iter=300,
                        verbose=0,

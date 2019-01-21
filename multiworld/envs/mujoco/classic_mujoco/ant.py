@@ -101,7 +101,10 @@ class AntEnv(MujocoEnv, MultitaskEnv, Serializable):
         return self._get_obs()
 
     def viewer_setup(self):
-        self.viewer.cam.distance = self.model.stat.extent * 0.5
+        self.viewer.cam.trackbodyid = -1
+        self.viewer.cam.elevation = -90
+        self.viewer.cam.lookat[2] += 1
+        # self.viewer.cam.distance = self.model.stat.extent * 0.2
 
     def reset(self):
         self.reset_model()

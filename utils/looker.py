@@ -40,7 +40,6 @@ class Looker:
         self.sub_dir = sub_dir
         os.makedirs(os.path.join(self.args.log_dir, self.sub_dir), exist_ok=True)
 
-
     def look(self, iteration=-1):
         # actor_critic, obs_rms = torch.load(os.path.join(self.args.log_dir, self.args.env_name + ".pt"))
         actor_critic, obs_rms = load_model(self.args.log_dir, iteration=iteration)
@@ -128,10 +127,10 @@ class Looker:
         tw = TableWriter(table, outputdir=os.path.join(root_dir, sub_dir), rowsPerPage=3)
         tw.write()
 
-def look_in_sub_dirs(dir):
-    contents = os.listdir(dir)
+def look_in_sub_dirs(root_dir):
+    contents = os.listdir(root_dir)
     for content in contents:
-        looker = Looker(log_dir=os.path.join(dir, content))
+        looker = Looker(log_dir=os.path.join(root_dir, content))
         looker.look_all()
 
 
@@ -140,12 +139,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--log-dir', default='')
     parser.add_argument('--log-dir-root', default='')
+    parser.add_argument('--iteration', type=int, default=-1)
     args = parser.parse_args()
     if args.log_dir != '':
-        looker = Looker(log_dir='/home/kylehsu/experiments/umrl/output/half-cheetah/20190119/include_x_pos_hidden256')
-        looker.look_all()
+        looker = Looker(log_dir=args.log_dir)
+        if args.iteration != -1:
+            looker.look(iteration=args.iteration)
+        else:
+            looker.look_all()
     elif args.log_dir_root != '':
-        look_in_sub_dirs(dir=args.log_dir_root)
+        look_in_sub_dirs(root_dir=args.log_dir_root)
 
 
 

@@ -24,7 +24,7 @@ class MultiTaskEnvInterface(ABC):
         self.envs = make_vec_envs(env_name=env_id,
                                   seed=args.seed,
                                   num_processes=args.num_processes,
-                                  gamma=args.gamma,
+                                  gamma=None,
                                   log_dir=args.log_dir,
                                   add_timestep=False,
                                   device=self.device,
