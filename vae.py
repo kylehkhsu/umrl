@@ -234,7 +234,7 @@ class VAE:
         return self._train_test_split(trajectories)
 
     def _train_test_split(self, trajectories):
-        if trajectories.shape[0] == 800 and trajectories.shape[1] == 100:
+        if trajectories.shape[0] == 800 and trajectories.shape[1] == 100:   # for testing only
             num_trajectories_per_skill = 40
             num_skills = trajectories.shape[0] // num_trajectories_per_skill
 
@@ -255,10 +255,10 @@ class VAE:
 
     def fit(self, trajectories, iteration):
         self._set_logging(iteration)
-        self.optimizer = torch.optim.Adam(
-            filter(lambda x: x.requires_grad, self.model.parameters()),
-            lr=self.args.vae_lr,
-        )
+        # self.optimizer = torch.optim.Adam(
+        #     filter(lambda x: x.requires_grad, self.model.parameters()),
+        #     lr=self.args.vae_lr,
+        # )
 
         dataset_train, dataset_test = self.preprocess_trajectories(trajectories)
 
@@ -270,17 +270,9 @@ class VAE:
         loader_test = torch.utils.data.DataLoader(
             dataset_test, shuffle=False, batch_size=batch_size, num_workers=2)
 
-        if iteration == 0:
-            if 'Point2D' in self.args.env_name:
-                num_max_epoch = 1000
-            elif 'HalfCheetah' in self.args.env_name or 'Ant' in self.args.env_name:
-                num_max_epoch = self.args.vae_max_fit_epoch
-            else:
-                raise ValueError
-        else:
-            num_max_epoch = self.args.vae_max_fit_epoch
+        num_max_epoch = self.args.vae_max_fit_epoch
 
-        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.normalize else 0.02, patience=num_max_epoch // 5)
+        early_stopping = EarlyStopping(mode='min', min_delta=0.005 if self.normalize else 0.02, patience=num_max_epoch // 10)
 
         t = tqdm(range(num_max_epoch))
         for i_epoch in t:
@@ -288,12 +280,12 @@ class VAE:
 
             t.set_description('train loss: {}'.format(loss_train))
 
-            if (i_epoch + 1) % (num_max_epoch // 10) == 0:
+            if i_epoch == 0 or (i_epoch + 1) % (num_max_epoch // 5) == 0:
                 loss_test = self._eval(loader_test, i_epoch)
                 # print('epoch: {}\tloss: {}'.format(i_epoch, losses.avg))
                 t.write('epoch: {}\ttrain loss: {}\ttest_loss: {}'.format(i_epoch, loss_train, loss_test))
 
-            if i_epoch > num_max_epoch // 10:
+            if i_epoch > num_max_epoch // 5:
                 if early_stopping.step(loss_train):     # doesn't start tracking until epoch 300
                     t.close()
                     break
@@ -538,17 +530,17 @@ class VAE:
             self.std = traj.sub(self.mean).pow(2).sum(dim=0).sum(dim=0).div(traj.shape[0] * traj.shape[1] - 1).sqrt()
 
     def normalize_data(self, x):
-        if 'Point2D' in self.args.env_name:
-            x = x.div(10)
-        else:
-            x = x.cpu().sub(self.mean).div(self.std)
+        # if 'Point2D' in self.args.env_name:
+        #     x = x.div(10)
+        # else:
+        x = x.cpu().sub(self.mean).div(self.std)
         return x
 
     def unnormalize_data(self, x):
-        if 'Point2D' in self.args.env_name:
-            x = x.mul(10)
-        else:
-            x = x.cpu().mul(self.std).add(self.mean)
+        # if 'Point2D' in self.args.env_name:
+        #     x = x.mul(10)
+        # else:
+        x = x.cpu().mul(self.std).add(self.mean)
         return x
 
 
