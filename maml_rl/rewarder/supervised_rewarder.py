@@ -7,6 +7,7 @@ class SupervisedRewarder:
         self.args = args
         self.tasks = None
         self.goals = None
+        self.fit_counter = 0
 
     def reset(self):
         pass
@@ -39,7 +40,7 @@ class SupervisedRewarder:
         self.goals = torch.stack([torch.from_numpy(task['goal']) for task in tasks])
 
     def fit(self):
-        raise RuntimeError
+        self.fit_counter += 1
 
     def calculate_reward(self, obs, actions):
         if self.args.env_name == 'Point2DWalls-corner-v0':

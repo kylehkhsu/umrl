@@ -21,14 +21,14 @@ class UnsupervisedRewarder:
     def __init__(self, args, obs_raw_shape):
         self.args = args
         self.obs_raw_shape = obs_raw_shape
-        self.tasks = None
-        self.latents = None
-        self.trajectory_current = None
-        self.rewards_current = None
+        self._tasks = None
+        self._latents = None
+        self._trajectory_current = None
+        self._rewards_current = None
         self.fit_counter = 0
         self.history = History(args)
         self.clusterer = VAE(args, obs_raw_shape[0])
-        self.fitted = False
+        self._fitted = False
 
     def save_episodes(self, episodes, is_pre_update):
         key = 'pre_update' if is_pre_update else 'post_update'
@@ -40,11 +40,11 @@ class UnsupervisedRewarder:
         fit_counter_to_task_to_episodes[self.fit_counter].append(episodes)
 
     def reset(self):
-        self.trajectory_current = []
-        self.rewards_current = []
+        self._trajectory_current = []
+        self._rewards_current = []
 
     def append(self, obs):
-        self.trajectory_current.append(obs)
+        self._trajectory_current.append(obs)
 
     def sample_tasks(self, num_tasks):
         # MAML interface wants tasks as list of dictionaries
@@ -56,8 +56,8 @@ class UnsupervisedRewarder:
         return tasks
 
     def set_tasks(self, tasks):
-        self.tasks = tasks
-        self.latents = torch.stack([torch.from_numpy(task['latent']) for task in tasks])
+        self._tasks = tasks
+        self._latents = torch.stack([torch.from_numpy(task['latent']) for task in tasks])
 
     def _get_fitting_data(self):
         # to get balanced/optimized data across tasks/fitting iterations
@@ -88,22 +88,22 @@ class UnsupervisedRewarder:
         trajs = self._get_fitting_data()
         self.clusterer.to(self.args.device)
         self.clusterer.fit(trajs, iteration=self.fit_counter)
-        self.fitted = True
+        self._fitted = True
         self.fit_counter += 1
         self.history.dump()
 
     def calculate_reward(self, obs, actions):
         reward_info = dict()
-        if not self.fitted:
-            reward = torch.zeros(self.args.num_processes)
+        if not self._fitted:
+            reward = torch.randn(self.args.num_processes)
             reward_info['log_marginal'] = torch.zeros(self.args.num_processes)
             reward_info['lambda_log_s_given_z'] = torch.zeros(self.args.num_processes)
             return reward, reward_info
 
         if self.args.reward == 's_given_z':
             if self.args.clusterer == 'vae':
-                z = self.latents
-                traj = torch.stack(self.trajectory_current, dim=1)
+                z = self._latents
+                traj = torch.stack(self._trajectory_current, dim=1)
 
                 log_s_given_z = self.clusterer.log_s_given_z(s=obs, z=z)
                 log_marginal = self.clusterer.log_marginal(s=obs, traj=traj)
@@ -122,8 +122,8 @@ class UnsupervisedRewarder:
         if isinstance(reward, np.ndarray):
             reward = torch.from_numpy(reward)
 
-        self.rewards_current.append(reward)
+        self._rewards_current.append(reward)
         if self.args.cumulative_reward:
-            rewards = torch.stack(self.rewards_current, dim=0)
+            rewards = torch.stack(self._rewards_current, dim=0)
             reward = rewards.mean(dim=0)
         return reward, reward_info
