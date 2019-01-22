@@ -527,7 +527,7 @@ class VAE:
         if self.args.vae_normalize_strategy == 'none':
             self.mean = torch.zeros(traj.shape[-1])
             self.std = torch.ones(traj.shape[-1])
-        elif self.args.vae_normalize_strategy == 'first_only':
+        elif self.args.vae_normalize_strategy == 'first':
             if self.mean is None and self.std is None:
                 self.mean = traj.mean(dim=0).mean(dim=0)
                 self.std = traj.sub(self.mean).pow(2).sum(dim=0).sum(dim=0).div(traj.shape[0] * traj.shape[1] - 1).sqrt()
