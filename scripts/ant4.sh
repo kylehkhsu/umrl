@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python -m ipdb -c continue main_contextual.py \
+CUDA_VISIBLE_DEVICES=0 python -m ipdb -c continue main_contextual.py \
     --algo ppo \
     --lr 3e-4 \
     --entropy-coef 0.001 \
@@ -36,11 +36,9 @@ python -m ipdb -c continue main_contextual.py \
     --num-processes 20 \
     --trial-length 1 \
     --episode-length 100 \
-    --trials-per-update 500 \
-    --num-updates 500 \
+    --trials-per-update 1000 \
+    --num-updates 250 \
     --save-period 10 \
     --vis-period 10 \
     --log_dir_root ./output/ant/exp_002 \
     --plot
-
-

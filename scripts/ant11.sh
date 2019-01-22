@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python -m ipdb -c continue main_contextual.py \
+CUDA_VISIBLE_DEVICES=0 python -m ipdb -c continue main_contextual.py \
     --algo ppo \
     --lr 3e-4 \
     --entropy-coef 0.001 \
@@ -17,18 +17,18 @@ python -m ipdb -c continue main_contextual.py \
     --clusterer vae \
     --reward s_given_z \
     --conditional-coef 1 \
-    --rewarder-fit-period 10 \
+    --rewarder-fit-period 20 \
     --subsample-num 1024 \
     --subsample-strategy last-random \
     --subsample-last-per-fit 500 \
-    --vae-beta 0.5 \
+    --vae-beta 0.6 \
     --vae-lr 5e-4 \
     --vae-hidden-size 512 \
     --vae-latent-size 16 \
     --vae-layers 5 \
     --vae-plot \
     --vae-normalize-strategy adaptive \
-    --vae-max-fit-epoch 1000 \
+    --vae-max-fit-epoch 2000 \
     --vae-batches 8 \
     --vae-marginal-samples 16 \
     --device cuda:0 \
@@ -38,9 +38,7 @@ python -m ipdb -c continue main_contextual.py \
     --episode-length 100 \
     --trials-per-update 500 \
     --num-updates 500 \
-    --save-period 10 \
-    --vis-period 10 \
+    --save-period 20 \
+    --vis-period 20 \
     --log_dir_root ./output/ant/exp_002 \
     --plot
-
-

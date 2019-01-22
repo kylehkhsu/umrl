@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python -m ipdb -c continue main_contextual.py \
+CUDA_VISIBLE_DEVICES=0 python -m ipdb -c continue main_contextual.py \
     --algo ppo \
     --lr 3e-4 \
     --entropy-coef 0.001 \
@@ -21,7 +21,7 @@ python -m ipdb -c continue main_contextual.py \
     --subsample-num 1024 \
     --subsample-strategy last-random \
     --subsample-last-per-fit 500 \
-    --vae-beta 0.5 \
+    --vae-beta 0.7 \
     --vae-lr 5e-4 \
     --vae-hidden-size 512 \
     --vae-latent-size 16 \
@@ -42,5 +42,3 @@ python -m ipdb -c continue main_contextual.py \
     --vis-period 10 \
     --log_dir_root ./output/ant/exp_002 \
     --plot
-
-

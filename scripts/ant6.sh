@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python -m ipdb -c continue main_contextual.py \
+CUDA_VISIBLE_DEVICES=0 python -m ipdb -c continue main_contextual.py \
     --algo ppo \
     --lr 3e-4 \
     --entropy-coef 0.001 \
@@ -9,7 +9,7 @@ python -m ipdb -c continue main_contextual.py \
     --gamma 0.99 \
     --tau 0.95 \
     --use-gae \
-    --init-gain 2 \
+    --init-gain 1.414 \
     --policy-hidden-size 256 \
     --env-name AntPos-v3 \
     --interface contextual \
@@ -42,5 +42,3 @@ python -m ipdb -c continue main_contextual.py \
     --vis-period 10 \
     --log_dir_root ./output/ant/exp_002 \
     --plot
-
-

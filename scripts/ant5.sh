@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python -m ipdb -c continue main_contextual.py \
+CUDA_VISIBLE_DEVICES=0 python -m ipdb -c continue main_contextual.py \
     --algo ppo \
     --lr 3e-4 \
     --entropy-coef 0.001 \
@@ -16,7 +16,7 @@ python -m ipdb -c continue main_contextual.py \
     --rewarder unsupervised \
     --clusterer vae \
     --reward s_given_z \
-    --conditional-coef 1 \
+    --conditional-coef 0.8 \
     --rewarder-fit-period 10 \
     --subsample-num 1024 \
     --subsample-strategy last-random \
@@ -42,5 +42,3 @@ python -m ipdb -c continue main_contextual.py \
     --vis-period 10 \
     --log_dir_root ./output/ant/exp_002 \
     --plot
-
-
