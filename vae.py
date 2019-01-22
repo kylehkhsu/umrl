@@ -202,7 +202,10 @@ class VAE:
         else:
             filename = self.filename
         if os.path.isfile(filename):
-            self.model = torch.load(filename)
+            vae_dict = torch.load(filename)
+            self.model = vae_dict['model']
+            self.mean = vae_dict['mean']
+            self.std = vae_dict['std']
             self.model.eval()
             print('loaded {}'.format(self.filename))
             self.model.to(self.device)
@@ -296,7 +299,9 @@ class VAE:
                     break
 
         model = copy.deepcopy(self.model).cpu()
-        torch.save(model, self.filename)
+        mean = self.mean.clone()
+        std = self.std.clone()
+        torch.save(dict(model=model, mean=mean, std=std), self.filename)
         print('wrote vae model to {}'.format(self.filename))
 
     def _train(self, loader, i_epoch):
@@ -381,31 +386,25 @@ class VAE:
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
                 x_plot = add_time(x_plot.cpu().numpy())
 
+                rootz = x_plot[:, :, 0].reshape([-1, 1])
+                rootx_vel = x_plot[:, :, 8].reshape([-1, 1])
+                rootz_vel = x_plot[:, :, 9].reshape([-1, 1])
                 time = x_plot[:, :, -1].reshape([-1, 1])
 
                 i_row = 0
-                rootx = x_plot[:, :, 0].reshape([-1, 1])
-                rootz = x_plot[:, :, 1].reshape([-1, 1])
-                sc = axes[i_row, i_col].scatter(rootx, rootz, c=time, s=1**2)
-                # plt.colorbar(sc, ax=axes[i_row, i_col])
-                axes[i_row, i_col].set_xlabel('rootx [m]')
-                axes[i_row, i_col].set_ylabel('rootz [m]')
+                sc = axes[i_row, i_col].scatter(rootz, rootx_vel, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('rootz [m]')
+                axes[i_row, i_col].set_ylabel('rootx_vel [m/s]')
 
                 i_row = 1
-                rootx_vel = x_plot[:, :, 9].reshape([-1, 1])
-                rootz_vel = x_plot[:, :, 10].reshape([-1, 1])
                 sc = axes[i_row, i_col].scatter(rootx_vel, rootz_vel, c=time, s=1**2)
-                # plt.colorbar(sc, ax=axes[i_row, i_col])
-                axes[i_row, i_col].set_xlabel('rootx [m/s]')
-                axes[i_row, i_col].set_ylabel('rootz [m/s]')
+                axes[i_row, i_col].set_xlabel('rootx_vel [m/s]')
+                axes[i_row, i_col].set_ylabel('rootz_vel [m/s]')
 
                 i_row = 2
-                rooty_avel = x_plot[:, :, 11].reshape([-1, 1])
-                bthigh_avel = x_plot[:, :, 12].reshape([-1, 1])
-                sc = axes[i_row, i_col].scatter(rooty_avel, bthigh_avel, c=time, s=1**2)
-                # plt.colorbar(sc, ax=axes[i_row, i_col])
-                axes[i_row, i_col].set_xlabel('rooty [rad/s]')
-                axes[i_row, i_col].set_ylabel('bthigh [rad/s]')
+                sc = axes[i_row, i_col].scatter(rootz, rootz_vel, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('rootz [m]')
+                axes[i_row, i_col].set_ylabel('rootz_vel [m/s]')
 
         def plot_ant():
             fig, axes = plt.subplots(nrows=3, ncols=4,
@@ -417,25 +416,25 @@ class VAE:
                 x_plot = x_plot.reshape([-1, self.episode_length, x_plot.shape[-1]])
                 x_plot = add_time(x_plot.cpu().numpy())
 
-                bodycom_x = x_plot[:, :, -4].reshape([-1, 1])
-                bodycom_y = x_plot[:, :, -3].reshape([-1, 1])
-                bodycom_z = x_plot[:, :, -2].reshape([-1, 1])
+                qpos_0 = x_plot[:, :, 0].reshape([-1, 1])
+                qpos_1 = x_plot[:, :, 1].reshape([-1, 1])
+                qpos_2 = x_plot[:, :, 2].reshape([-1, 1])
                 time = x_plot[:, :, -1].reshape([-1, 1])
 
                 i_row = 0
-                sc = axes[i_row, i_col].scatter(bodycom_x, bodycom_y, c=time, s=1**2)
-                axes[i_row, i_col].set_xlabel('bodycom_x [m]')
-                axes[i_row, i_col].set_ylabel('bodycom_y [m]')
+                sc = axes[i_row, i_col].scatter(qpos_0, qpos_1, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('qpos_0 [m]')
+                axes[i_row, i_col].set_ylabel('qpos_1 [m]')
 
                 i_row = 1
-                sc = axes[i_row, i_col].scatter(bodycom_x, bodycom_z, c=time, s=1**2)
-                axes[i_row, i_col].set_xlabel('bodycom_x [m]')
-                axes[i_row, i_col].set_ylabel('bodycom_z [m]')
+                sc = axes[i_row, i_col].scatter(qpos_0, qpos_2, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('qpos_0 [m]')
+                axes[i_row, i_col].set_ylabel('qpos_2 [m]')
 
                 i_row = 2
-                sc = axes[i_row, i_col].scatter(bodycom_y, bodycom_z, c=time, s=1**2)
-                axes[i_row, i_col].set_xlabel('bodycom_y [m]')
-                axes[i_row, i_col].set_ylabel('bodycom_z [m]')
+                sc = axes[i_row, i_col].scatter(qpos_1, qpos_2, c=time, s=1**2)
+                axes[i_row, i_col].set_xlabel('qpos_1 [m]')
+                axes[i_row, i_col].set_ylabel('qpos_2 [m]')
 
         if self.args.vae_plot:
             if 'Point2D' in self.args.env_name:
@@ -528,7 +527,7 @@ class VAE:
         if self.args.vae_normalize_strategy == 'none':
             self.mean = torch.zeros(traj.shape[-1])
             self.std = torch.ones(traj.shape[-1])
-        elif self.args.vae_normalize_strategy == 'first':
+        elif self.args.vae_normalize_strategy == 'first_only':
             if self.mean is None and self.std is None:
                 self.mean = traj.mean(dim=0).mean(dim=0)
                 self.std = traj.sub(self.mean).pow(2).sum(dim=0).sum(dim=0).div(traj.shape[0] * traj.shape[1] - 1).sqrt()
@@ -548,14 +547,14 @@ class VAE:
         # if 'Point2D' in self.args.env_name:
         #     x = x.div(10)
         # else:
-        x = x.cpu().sub(self.mean).div(self.std)
+        x = x.cpu().sub(self.mean).div(self.std + 1e-6)
         return x
 
     def unnormalize_data(self, x):
         # if 'Point2D' in self.args.env_name:
         #     x = x.mul(10)
         # else:
-        x = x.cpu().mul(self.std).add(self.mean)
+        x = x.cpu().mul(self.std + 1e-6).add(self.mean)
         return x
 
 

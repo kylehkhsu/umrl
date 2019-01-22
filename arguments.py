@@ -71,7 +71,7 @@ def get_args():
     parser.add_argument('--vae-latent-size', type=int, default=16)
     parser.add_argument('--vae-layers', type=int, default=10)
     parser.add_argument('--vae-plot', default=False, action='store_true')
-    parser.add_argument('--vae-normalize', default=False, action='store_true')
+    parser.add_argument('--vae-normalize-strategy', default='adaptive')
     parser.add_argument('--vae-max-fit-epoch', type=int, default=1000,
                         help='first fitting is fixed to be 1000 epochs, this controls subsequent fittings')
     parser.add_argument('--vae-weights', type=str, default='')

@@ -9,7 +9,7 @@ import re
 import glob
 from utils.map import Map
 import json
-
+import ast
 from matplotlib.colors import LinearSegmentedColormap
 
 from pyhtmlwriter.Element import Element
@@ -119,41 +119,107 @@ def plot_coverage_all(args, history, save_dir):
     plt.close('all')
 
 
-def plot_and_save(log_dir, sub_dir='plt'):
-    save_dir = os.path.join(log_dir, sub_dir)
-    os.makedirs(save_dir, exist_ok=True)
+def plot_point2d_val(episodes):
+    num_tasks = len(episodes.keys())
+    num_iters = len(list(episodes.values())[0])
 
+    fig, axes = plt.subplots(nrows=num_iters, ncols=num_tasks, sharex='all', sharey='row',
+                             figsize=[3 * num_tasks, 3 * num_iters])
+
+    for i_col, (task_name, task_episodes) in enumerate(episodes.items()):
+        regexp = re.compile('goal.*(\[.*([-+]?[0-9]*\.?[0-9]+).*\])')
+        match = regexp.search(task_name)
+        task_name = f"goal: {match[1]}"
+        goal = ast.literal_eval(match[1])
+
+        for i_row, episode in enumerate(task_episodes):
+            ax = axes[i_row, i_col]
+            setup_axes(ax, limit=10, walls=True)
+
+            if i_row == 0:
+                ax.set_title(task_name)
+            if i_col == 0:
+                ax.set_ylabel(f"iteration {i_row}")
+
+            trajs = episode.observations.cpu().transpose(0, 1).numpy()
+            trajs = add_time(trajs)
+            states = trajs.reshape([-1, trajs.shape[-1]])
+            ax.scatter(states[:, 0], states[:, 1], c=states[:, 2], s=1 ** 2, marker='o')
+            goal_artist = plt.Circle(goal, radius=2, color='g', alpha=0.5)
+            ax.add_artist(goal_artist)
+
+
+def plot_val_all(args, log_dir, plt_dir, val_dir, skip_if_exists=True):
+    contents = os.listdir(val_dir)
+    regexp = re.compile('(val_(\d+)).pkl', flags=re.ASCII)
+    to_plot = []
+    for content in contents:
+        match = regexp.search(content)
+        if match:
+            plt_name = match[1]
+            sortby = int(match[2])
+            to_plot.append((content, plt_name, sortby))
+    to_plot = sorted(to_plot, key=lambda x: x[2], reverse=True)
+
+    for (pickle_name, plt_name, _) in to_plot:
+        plt_path = os.path.join(plt_dir, f'{plt_name}.png')
+        if os.path.isfile(plt_path) and skip_if_exists:
+            continue
+
+        pickle_path = os.path.join(val_dir, pickle_name)
+        episodes = pickle.load(open(pickle_path, 'rb'))
+        if 'Point2D' in args.env_name:
+            plot_point2d_val(episodes)
+            plt.savefig(plt_path)
+            plt.close('all')
+
+
+def plot_supervised(args, log_dir, plt_dir):
+    os.makedirs(plt_dir, exist_ok=True)
+    val_dir = os.path.join(log_dir, 'val')
+    plot_val_all(args, log_dir, plt_dir, val_dir)
+
+
+def plot_unsupervised(args, log_dir, plt_dir):
     history_filename = os.path.join(log_dir, 'history.pkl')
     history = pickle.load(open(history_filename, 'rb'))
     args = Map(json.load(open(os.path.join(log_dir, 'params.json'), 'r')))
 
     if 'point2d' in log_dir:
-        plot_tasks_all(args, history, save_dir, skip_if_exists=True)
-        plot_coverage_all(args, history, save_dir)
-
-        # plot_per_fitting_iteration(history)
-        # plt.savefig(os.path.join(save_dir, 'trajectories_per_iteration'))
-        #
-        # plot_previous_states_per_fitting_iteration(history)
-        # plt.savefig(os.path.join(save_dir, 'all_states'))
+        plot_tasks_all(args, history, plt_dir, skip_if_exists=True)
+        plot_coverage_all(args, history, plt_dir)
     elif 'half-cheetah' in log_dir or 'ant' in log_dir:
         pass
     else:
         raise ValueError
 
-    make_html(log_dir)
-
     plt.close('all')
     return
 
 
+def main(log_dir):
+    args = Map(json.load(open(os.path.join(log_dir, 'params.json'), 'r')))
+    plt_dir = os.path.join(log_dir, 'plt')
+    os.makedirs(plt_dir, exist_ok=True)
+
+    try:
+        plot_unsupervised(args, log_dir, plt_dir)
+    except FileNotFoundError:
+        pass
+
+    plot_supervised(args, log_dir, plt_dir)
+
+    make_html(log_dir)
+
+
 def make_html(root_dir, sub_dir='plt', extension='.png'):
     contents = filter(lambda x: x[-4:] == extension, os.listdir(os.path.join(root_dir, sub_dir)))
-
-    regexp = re.compile('(.*(\d+)){}'.format(extension), flags=re.ASCII)
-    regexp2 = re.compile(f'(.*){extension}', flags=re.ASCII)
-
     media = []
+
+    regexp = re.compile(f'(.*(\d+)){extension}', flags=re.ASCII)
+
+    # trajectories_per_fitting_iteration
+    regexp_any = re.compile(f'(.*){extension}', flags=re.ASCII)
 
     for filename in contents:
         match = regexp.search(filename)
@@ -162,7 +228,7 @@ def make_html(root_dir, sub_dir='plt', extension='.png'):
             sortby = int(match[2])
             media.append((filename, title, sortby))
         else:
-            match = regexp2.search(filename)
+            match = regexp_any.search(filename)
             title = match[1]
             sortby = float('inf')
             media.append((filename, title, sortby))
@@ -182,6 +248,8 @@ def make_html(root_dir, sub_dir='plt', extension='.png'):
         if 'tasks' in title:
             width = 2000
         elif 'vae' in title:
+            width = 1000
+        elif 'val' in title:
             width = 1000
         else:
             width = 1000
@@ -221,7 +289,13 @@ def get_vae_media(root_dir, sub_dir='plt'):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--log-dir', default='/home/kylehsu/experiments/umrl/output/debug/point2d/maml_vae/20190120-21:55:28:874185')
+    parser.add_argument('--log-dir', default='')
+    parser.add_argument('--log-dir-root', default='')
     args = parser.parse_args()
-    plot_and_save(args.log_dir)
+    if args.log_dir != '':
+        main(args.log_dir)
+    elif args.log_dir_root != '':
+        contents = os.listdir(args.log_dir_root)
+        for content in contents:
+            main(os.path.join(args.log_dir_root, content))
 

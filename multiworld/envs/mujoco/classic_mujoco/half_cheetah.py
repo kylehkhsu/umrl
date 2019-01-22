@@ -42,8 +42,14 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
     def model_name(self):
         return get_asset_full_path('classic_mujoco/half_cheetah.xml')
 
+    def _scale_action(self, action):
+        lb, ub = self.action_space.low, self.action_space.high
+        scaled_action = lb + (action + 1.) * 0.5 * (ub - lb)
+        scaled_action = np.clip(scaled_action, lb, ub)
+        return scaled_action
+
     def step(self, action):
-        action = action * self.action_scale
+        scaled_action = self._scale_action(action)
         x_before = self.sim.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
         x_after = self.sim.data.qpos[0]
@@ -85,16 +91,20 @@ class HalfCheetahEnv(MujocoEnv, MultitaskEnv, Serializable):
         info['vel_success'] = (xvel_error < self.indicator_threshold).astype(float)
         return info
 
-    def compute_rewards(self, actions, obs):
-        achieved_goals = obs['achieved_goal']
-        desired_goals = obs['desired_goal']
-        distances = np.linalg.norm(achieved_goals - desired_goals, axis=1)
-        if self.reward_type == 'vel_distance':
-            r = -distances
-        elif self.reward_type == 'vel_success':
-            r = -(distances > self.indicator_threshold).astype(float)
-        else:
-            raise NotImplementedError("Invalid/no reward type.")
+    def compute_rewards(self, action, obs):
+        # achieved_goals = obs['achieved_goal']
+        # desired_goals = obs['desired_goal']
+        # distances = np.linalg.norm(achieved_goals - desired_goals, axis=1)
+        # if self.reward_type == 'vel_distance':
+        #     r = -distances
+        # elif self.reward_type == 'vel_success':
+        #     r = -(distances > self.indicator_threshold).astype(float)
+        # else:
+        #     raise NotImplementedError("Invalid/no reward type.")
+        ctrl_cost = 1e-1 * 0.5 * np.sum(np.square(action))
+
+
+
         return r
 
     def reset_model(self):

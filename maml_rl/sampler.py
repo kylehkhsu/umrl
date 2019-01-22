@@ -73,11 +73,11 @@ class BatchSamplerMultiworld(object):
                                   device=args.device,
                                   allow_early_resets=True)
 
-        if not val:
+        if val or args.rewarder == 'supervised':
+            self.rewarder = SupervisedRewarder(args)
+        else:
             obs_raw_shape = self.envs.observation_space.shape
             self.rewarder = UnsupervisedRewarder(args, obs_raw_shape=obs_raw_shape)
-        else:
-            self.rewarder = SupervisedRewarder(args)
 
         self.args = args
         self.logging_info = dict(pre_update=[], post_update=[])
@@ -132,7 +132,7 @@ class BatchSamplerMultiworld(object):
         else:
             self.logging_info['post_update'].append(info)
 
-    def log(self, logger):
+    def log_unsupervised(self, logger):
 
         for quantity_name in ['log_marginal', 'lambda_log_s_given_z']:
             quantity_pre = [info[quantity_name] for info in self.logging_info['pre_update']]

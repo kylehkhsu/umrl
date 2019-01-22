@@ -11,7 +11,7 @@ python -m ipdb -c continue main_contextual.py \
     --use-gae \
     --init-gain 2 \
     --policy-hidden-size 256 \
-    --env-name HalfCheetah-v0 \
+    --env-name HalfCheetahVel-v3 \
     --interface contextual \
     --rewarder unsupervised \
     --clusterer vae \
@@ -27,21 +27,20 @@ python -m ipdb -c continue main_contextual.py \
     --vae-latent-size 8 \
     --vae-layers 5 \
     --vae-plot \
-    --vae-normalize \
+    --vae-normalize-strategy adaptive \
     --vae-max-fit-epoch 1000 \
     --vae-batches 8 \
     --vae-marginal-samples 16 \
     --device cuda:0 \
     --seed 1 \
-    --num-processes 5 \
+    --num-processes 20 \
     --trial-length 1 \
-    --episode-length 50 \
+    --episode-length 100 \
     --trials-per-update 500 \
     --num-updates 200 \
     --save-period 10 \
     --vis-period 10 \
-    --log_dir_root ./output/half-cheetah/exp_001 \
-    --look \
+    --log_dir_root ./output/half-cheetah/exp_002 \
     --plot
 
 

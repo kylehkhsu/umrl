@@ -152,7 +152,6 @@ class UnsupervisedRewarder(Rewarder):
         return tasks
 
 
-
     def _sample_task_one(self, i_process):
         if self.fit_counter == 0 and self.args.clusterer != 'vae':
             return None

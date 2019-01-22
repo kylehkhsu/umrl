@@ -9,15 +9,15 @@ python -m ipdb -c continue main_contextual.py \
     --gamma 0.99 \
     --tau 0.95 \
     --use-gae \
-    --init-gain 2 \
-    --policy-hidden-size 256 \
-    --env-name AntPos-v3 \
+    --init-gain 1.414 \
+    --policy-hidden-size 64 \
+    --env-name Point2DWalls-corner-v0 \
     --interface contextual \
     --rewarder unsupervised \
     --clusterer vae \
     --reward s_given_z \
-    --conditional-coef 1 \
-    --rewarder-fit-period 10 \
+    --conditional-coef 0.5 \
+    --rewarder-fit-period 5 \
     --subsample-num 1024 \
     --subsample-strategy last-random \
     --subsample-last-per-fit 100 \
@@ -35,12 +35,13 @@ python -m ipdb -c continue main_contextual.py \
     --seed 1 \
     --num-processes 20 \
     --trial-length 1 \
-    --episode-length 100 \
+    --episode-length 50 \
     --trials-per-update 500 \
     --num-updates 200 \
-    --save-period 10 \
-    --vis-period 10 \
-    --log_dir_root ./output/ant/exp_002 \
+    --save-period 5 \
+    --vis-period 5 \
+    --log_dir_root ./output/point2d/exp_005 \
+    --look \
     --plot
 
 

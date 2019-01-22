@@ -33,6 +33,7 @@ class NormalMLPPolicy(Policy):
         self.sigma.data.fill_(math.log(init_std))
 
         self.bias_transformation = nn.Parameter(torch.Tensor(bias_transformation_size))
+        nn.init.uniform_(self.bias_transformation.data, a=-1, b=1)
 
         def weight_init(module):
             if isinstance(module, nn.Linear):
